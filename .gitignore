@@ -10,6 +10,9 @@ odiclient.conf
 odiclient.conf.tmp
 autogg.conf
 autogg.conf.tmp
+imgui.ini
+*.conf
+*.conf.tmp
 /skins/
 
 # Python caches and local virtual environments.
@@ -29,3 +32,10 @@ __pycache__/
 *~
 /core
 /core.*
+
+# Local credentials and keys.
+.env
+.env.*
+*.pem
+*.key
+credentials.json
