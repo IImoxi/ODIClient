@@ -7,7 +7,7 @@
 #include <cstring>
 #include <cstdio>
 #include <dlfcn.h>
-#include "custom_menu.cpp"
+#include "../custom_menu.cpp"
 
 static long long testFrameNs = 1000000000LL;
 static bool testLocked = true;

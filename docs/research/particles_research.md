@@ -46,10 +46,10 @@ installation is Retained. Installation uses the shared hook manager exclusively.
 
 ## Validation and limits
 
-`python3 test_native_build.py libminecraftpe.so` checks the build ID, both attack
+`python3 tests/test_native_build.py libminecraftpe.so` checks the build ID, both attack
 slots and complete wrapper signatures, initiating-player field read, player RTTI identities, critical-emitter
 slot/signature/string/context displacement/tail-call, and emitter entry bytes.
-`test_particles.cpp` checks target filtering, enable/gameplay/context guards,
+`tests/test_particles.cpp` checks target filtering, enable/gameplay/context guards,
 original arguments/returns, both executable wrapper paths, and corruption gates.
 The persistence test covers version-12 migration and the saved toggle.
 

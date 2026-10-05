@@ -4,7 +4,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <sys/mman.h>
-#include "tablist.cpp"
+#include "../tablist.cpp"
 
 #ifdef TABLIST_PRESENCE_FIXTURE
 void test_presence_load(const char*, long long);

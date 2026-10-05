@@ -1,4 +1,4 @@
-#include "analog_input.h"
+#include "../analog_input.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>

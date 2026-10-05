@@ -167,6 +167,8 @@ instructions. Keep this map current when architecture, files, or commands change
 
 ## File map
 
+Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
+
 | Files | Purpose / when to read |
 | --- | --- |
 | `client.cpp`, `client_modules.h` | Mod entry points, launcher callbacks, atomic module state and typed module controls, cursor and gameplay coordination. Start here for module lifecycle wiring. |
@@ -176,27 +178,27 @@ instructions. Keep this map current when architecture, files, or commands change
 | `native_cursor.h` | Version-sensitive native GameWindowHandle/vtable bridge for cursor capture. |
 | `native_input.h` | Launcher 1.8.4 x86_64/libstdc++ GameWindow callback and string bridge for synthetic keyboard/text input. |
 | `minecraft_build.h` | Central Minecraft ELF build ID, AutoGG chat/command packet ABI addresses, Zoom sites, and signatures for the supported game build. |
-| `hook_manager.h`, `hook_manager.cpp`, `test_hook_manager.cpp` | Shared game discovery/build and mapping checks, owned eight-byte patch batches, page protections, rollback, and nearby relay allocation. AutoGG, Zoom, Render, Tablist, and Particles use it. |
+| `hook_manager.h`, `hook_manager.cpp`, `tests/test_hook_manager.cpp` | Shared game discovery/build and mapping checks, owned eight-byte patch batches, page protections, rollback, and nearby relay allocation. AutoGG, Zoom, Render, Tablist, and Particles use it. |
 | `auto_gg.cpp`, `auto_gg.h` | Version-gated TextPacket dispatcher hook, formatting removal, trigger/response, native chat and CommandRequestPacket senders, Lobby Scanner commands/confirmation queue and additional live dispatcher hooks, cancellation, saved settings, and Chat mods blacklist filtering. |
 | `autosprint.cpp`, `autosprint.h` | SDL3/X11 symbol loading, physical keys, focus, synthetic keys, movement releases, and cursor centering. |
 | `motion_blur.cpp`, `motion_blur.h`, `panel_renderer.h` | Shared host EGL/GL adapter, frame history, whole-screen blur, and general `draw_gl_panel()` primitive using `PanelPaint`; preserves GL state and antialiases rounded fills/outlines. |
 | `custom_menu.cpp`, `custom_menu.h` | Menu builders/model, scrolling tiles and controls, text input/caret and optional multiline fields, key-binding capture, layout/animation helpers, frame snapshots, and drawing. `custom_menu_is_visible()` includes animations; `custom_menu_captures_input()` governs input/cursor/gameplay. |
-| `SHARED_APIS.md` | Internal API reuse guide, examples, threading/lifetime constraints, and candidates for future extraction. |
-| `ui_animation.h`, `test_ui_animation.cpp` | Stateless shared quartic/exponential easing for menu, Tablist and popup; no linked runtime dependency. |
+| `docs/SHARED_APIS.md` | Internal API reuse guide, examples, threading/lifetime constraints, and candidates for future extraction. |
+| `ui_animation.h`, `tests/test_ui_animation.cpp` | Stateless shared quartic/exponential easing for menu, Tablist and popup; no linked runtime dependency. |
 | `menu_style.h` | Menu, scrollbar, slider, and Tablist colors, opacities, blur tint/strength, corner radii, panel spacing, and animation/input timing. |
 | `menu_pages.cpp` | Custom-menu page and tile declarations using `newPage()` and `newTile()`. |
 | `custom_font.cpp`, `custom_font.h`, `assets/inter.ttf`, `assets/icon-*.png` | Host FreeType text atlas (Tablist can also select the latest launcher Mojangles font), PNG icon loading, shared GL drawing, 16x16 RGBA tablist-head uploads, offscreen fixed-view 3D skin rendering, and hold-progress ring. |
 | `palette.json` | Custom menu color palette reference. |
-| `zoom.cpp`, `zoom.h`, `test_zoom.cpp` | Build-ID/signature-gated camera FOV reads, per-thread read-only option proxies, optics, and executable hook tests. |
+| `zoom.cpp`, `zoom.h`, `tests/test_zoom.cpp` | Build-ID/signature-gated camera FOV reads, per-thread read-only option proxies, optics, and executable hook tests. |
 | `fps_limiter.cpp`, `fps_limiter.h` | Host monotonic timer loading and software frame pacing. |
-| `skin_image.cpp`, `skin_image.h`, `test_skin_image.cpp` | Host skin allocation independent of export setup, mapped-ELF path lookup (not host dladdr), and asynchronous lossless PNG export to the mod root `skins/` folder; dynamic libc/zlib loading and export checks. |
-| `tablist.cpp`, `tablist.h`, `test_tablist.cpp` | Native roster/skin/world lifecycle observers, copied player cache, Lobby Scanner join notifications, Tab/scroll/right-click input, selected-skin preview, animated dimensions and overlay, saved master toggle, and native/layout checks. |
-| `flarial_presence.cpp`, `flarial_presence.h`, `test_flarial_presence.cpp` | Optional host curl/json-c background presence lookup for Tablist badges; no linked runtime dependency. |
-| `experimental.cpp`, `experimental.h`, `test_experimental.cpp` | Temporary chat typing trigger and regression checks for typing, holds, and popup callbacks. |
-| `lobby_scanner_research.md` | Exact-build evidence for additional typed dispatchers used for deferred confirmed sends. |
-| `popup.cpp`, `popup.h`, `test_popup_render.cpp` | Shared thread-safe yes/no popup API, copied text, callbacks, passive input, drawing above GUIs, and headless pixel checks. |
-| `particles.cpp`, `particles.h`, `test_particles.cpp`, `particles_research.md` | Player attack effects, native critical emitter, behavior/ABI gates, and investigation evidence. |
-| `render.cpp`, `render.h`, `test_render.cpp`, `render_research.md` | Experimental vertical terrain-list filtering, executable hook/ABI checks, and native investigation evidence. |
+| `skin_image.cpp`, `skin_image.h`, `tests/test_skin_image.cpp` | Host skin allocation independent of export setup, mapped-ELF path lookup (not host dladdr), and asynchronous lossless PNG export to the mod root `skins/` folder; dynamic libc/zlib loading and export checks. |
+| `tablist.cpp`, `tablist.h`, `tests/test_tablist.cpp` | Native roster/skin/world lifecycle observers, copied player cache, Lobby Scanner join notifications, Tab/scroll/right-click input, selected-skin preview, animated dimensions and overlay, saved master toggle, and native/layout checks. |
+| `flarial_presence.cpp`, `flarial_presence.h`, `tests/test_flarial_presence.cpp` | Optional host curl/json-c background presence lookup for Tablist badges; no linked runtime dependency. |
+| `experimental.cpp`, `experimental.h`, `tests/test_experimental.cpp` | Temporary chat typing trigger and regression checks for typing, holds, and popup callbacks. |
+| `docs/research/lobby_scanner_research.md` | Exact-build evidence for additional typed dispatchers used for deferred confirmed sends. |
+| `popup.cpp`, `popup.h`, `tests/test_popup_render.cpp` | Shared thread-safe yes/no popup API, copied text, callbacks, passive input, drawing above GUIs, and headless pixel checks. |
+| `particles.cpp`, `particles.h`, `tests/test_particles.cpp`, `docs/research/particles_research.md` | Player attack effects, native critical emitter, behavior/ABI gates, and investigation evidence. |
+| `render.cpp`, `render.h`, `tests/test_render.cpp`, `docs/research/render_research.md` | Experimental vertical terrain-list filtering, executable hook/ABI checks, and native investigation evidence. |
 | `analog_input.cpp`, `analog_input.h` | Nonblocking mod/helper IPC, peer identity, status, mixed-input startup flag. |
 | `nuphy_analog.py` | Analog mapping, Unix socket server, virtual controller via `/dev/uinput`, neutralization and output throttling. |
 | `nuphy_distance.py` | NuPhy `/dev/hidraw*` device discovery, reporting protocol, travel decoding; imported by the analog helper. |
@@ -204,13 +206,13 @@ instructions. Keep this map current when architecture, files, or commands change
 | `build.sh`, `install.sh` | Compile, package, and install. Build automatically runs install. |
 | `1.0.0/x86_64/mod.json` | Launcher mod identity, version, architecture, and description. |
 | `1.0.0/x86_64/` | Runtime package: compiled mod plus installed copies of helpers and README. Edit root sources, then rebuild/install. |
-| `test_sdl_input.cpp`, `test_native_build.py` | SDL focus/sprint/cursor regression checks and checks against the actual Minecraft ELF. |
-| `test.cpp` | Mock launcher/X11 checks for the L custom-menu route, cursor, and sprint behavior; includes stubs for other modules. |
-| `test_analog.py`, `test_analog_input.cpp` | Helper mapping/protocol checks and native IPC integration checks. |
-| `test_custom_menu.cpp` | Real headless EGL/GLES checks for antialiasing, animation/input timing, key/mouse releases, tile/settings scrolling, callback reentry, conditional bubble layout/hit areas, hidden focus/drag cleanup, slider extremes, registration limits, and layout bounds. Includes the menu source. |
-| `test_custom_font.cpp` | Real headless EGL/GLES checks for custom-menu text/icon pixels, inherited clipping and color masks, texture uploads, and GL state restoration. Includes the renderer source to inspect atlas pixels. |
-| `test_motion_blur.cpp` | Real headless EGL/GLES checks for pixels, state, and history lifecycle. |
-| `test_auto_gg.cpp` | AutoGG checks, including native sender bridge, local/remote chat echo, packet layouts, cooldown/cancellation, saved settings, and build-ID/vtable gate. Includes the module source to exercise its private bridge. |
+| `tests/test_sdl_input.cpp`, `tests/test_native_build.py` | SDL focus/sprint/cursor regression checks and checks against the actual Minecraft ELF. |
+| `tests/test.cpp` | Mock launcher/X11 checks for the L custom-menu route, cursor, and sprint behavior; includes stubs for other modules. |
+| `tests/test_analog.py`, `tests/test_analog_input.cpp` | Helper mapping/protocol checks and native IPC integration checks. |
+| `tests/test_custom_menu.cpp` | Real headless EGL/GLES checks for antialiasing, animation/input timing, key/mouse releases, tile/settings scrolling, callback reentry, conditional bubble layout/hit areas, hidden focus/drag cleanup, slider extremes, registration limits, and layout bounds. Includes the menu source. |
+| `tests/test_custom_font.cpp` | Real headless EGL/GLES checks for custom-menu text/icon pixels, inherited clipping and color masks, texture uploads, and GL state restoration. Includes the renderer source to inspect atlas pixels. |
+| `tests/test_motion_blur.cpp` | Real headless EGL/GLES checks for pixels, state, and history lifecycle. |
+| `tests/test_auto_gg.cpp` | AutoGG checks, including native sender bridge, local/remote chat echo, packet layouts, cooldown/cancellation, saved settings, and build-ID/vtable gate. Includes the module source to exercise its private bridge. |
 | `skins/` | Local timestamped skin exports; do not ship personal exports in distribution archives. |
 | `build/`, `__pycache__/` | Generated files, not source. |
 
@@ -322,12 +324,12 @@ When a Minecraft update breaks a native feature, confirm the game binary first:
 3. Put verified values in `minecraft_build.h`; keep version-specific addresses
    and signatures out of the module implementations. Both hooks must continue to
    check the exact GNU build ID and expected vtable/code signatures before patching.
-4. Run `python3 test_native_build.py <binary>`. It checks the selected profile
+4. Run `python3 tests/test_native_build.py <binary>`. It checks the selected profile
    against the candidate, including AutoGG's dispatcher, vtables, sender call
    sites, and Zoom's camera reads and FOV floor. A failure means the binary and
    profile do not match. The checker validates supplied values; it cannot locate
    safe hooks, identify changed C++ layouts, or prove chat sending works in game.
-5. Update native fixtures in `test_auto_gg.cpp` and `test_zoom.cpp` when their
+5. Update native fixtures in `tests/test_auto_gg.cpp` and `tests/test_zoom.cpp` when their
    gates or call-site patch shapes change. Run the shared manager checks too,
    then rebuild with `bash build.sh`. A new build normally changes
    `minecraft_build.h` and the feature's ABI bridge, not the shared patch manager.
@@ -359,45 +361,45 @@ Run the checks relevant to the changed module (create `build/` first if absent):
 
 ```sh
 mkdir -p build
-g++ -std=c++17 -Wall -Wextra -Werror test_ui_animation.cpp -o build/test-ui-animation
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_ui_animation.cpp -o build/test-ui-animation
 ./build/test-ui-animation
-g++ -std=c++17 -Wall -Wextra -Werror test_experimental.cpp experimental.cpp -o build/test-experimental
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_experimental.cpp experimental.cpp -o build/test-experimental
 ./build/test-experimental
 clang++ -std=c++17 -Wall -Wextra -Werror -I/usr/include/freetype2 \
-    test_popup_render.cpp popup.cpp custom_font.cpp motion_blur.cpp -ldl -lEGL -lGLESv2 -o build/test-popup-render
+    tests/test_popup_render.cpp popup.cpp custom_font.cpp motion_blur.cpp -ldl -lEGL -lGLESv2 -o build/test-popup-render
 LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-popup-render
-g++ -std=c++17 -Wall -Wextra -Werror client.cpp autosprint.cpp test.cpp -o build/test-menu
+g++ -std=c++17 -Wall -Wextra -Werror client.cpp autosprint.cpp tests/test.cpp -o build/test-menu
 ./build/test-menu
-g++ -std=c++17 -Wall -Wextra -Werror test_custom_menu.cpp motion_blur.cpp \
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_custom_menu.cpp motion_blur.cpp \
     -ldl -lEGL -lGLESv2 -o build/test-custom-menu
 LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-custom-menu
-g++ -std=c++17 -Wall -Wextra -Werror test_sdl_input.cpp -o build/test-sdl-input
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_sdl_input.cpp -o build/test-sdl-input
 ./build/test-sdl-input
-python3 test_native_build.py
-g++ -std=c++17 -Wall -Wextra -Werror test_particles.cpp hook_manager.cpp -ldl -o build/test-particles
+python3 tests/test_native_build.py
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_particles.cpp hook_manager.cpp -ldl -o build/test-particles
 ./build/test-particles
-g++ -std=c++17 -Wall -Wextra -Werror test_hook_manager.cpp -ldl -o build/test-hook-manager
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_hook_manager.cpp -ldl -o build/test-hook-manager
 ./build/test-hook-manager
-g++ -std=c++17 -Wall -Wextra -Werror test_zoom.cpp hook_manager.cpp -ldl -pthread -o build/test-zoom
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_zoom.cpp hook_manager.cpp -ldl -pthread -o build/test-zoom
 ./build/test-zoom
-g++ -std=c++17 -Wall -Wextra -Werror test_auto_gg.cpp hook_manager.cpp -ldl -o build/test-auto-gg
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_auto_gg.cpp hook_manager.cpp -ldl -o build/test-auto-gg
 ./build/test-auto-gg
 g++ -std=c++17 -Wall -Wextra -Werror -DTABLIST_PRESENCE_FIXTURE \
-    test_tablist.cpp test_flarial_presence.cpp skin_image.cpp hook_manager.cpp -ldl -pthread -o build/test-tablist
+    tests/test_tablist.cpp tests/test_flarial_presence.cpp skin_image.cpp hook_manager.cpp -ldl -pthread -o build/test-tablist
 ./build/test-tablist
-g++ -std=c++17 -Wall -Wextra -Werror test_skin_image.cpp -ldl -pthread -o build/test-skin-image
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_skin_image.cpp -ldl -pthread -o build/test-skin-image
 ./build/test-skin-image
-g++ -std=c++17 -Wall -Wextra -Werror test_flarial_presence.cpp -ldl -o build/test-flarial-presence
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_flarial_presence.cpp -ldl -o build/test-flarial-presence
 ./build/test-flarial-presence
-g++ -std=c++17 -Wall -Wextra -Werror test_render.cpp hook_manager.cpp -ldl -o build/test-render
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_render.cpp hook_manager.cpp -ldl -o build/test-render
 ./build/test-render
-python3 test_analog.py
-g++ -std=c++17 -Wall -Wextra -Werror analog_input.cpp test_analog_input.cpp -ldl -o build/test-analog-input
+python3 tests/test_analog.py
+g++ -std=c++17 -Wall -Wextra -Werror analog_input.cpp tests/test_analog_input.cpp -ldl -o build/test-analog-input
 ./build/test-analog-input
-g++ -std=c++17 -Wall -Wextra -Werror motion_blur.cpp test_motion_blur.cpp -ldl -lEGL -lGLESv2 -o build/test-motion-blur
+g++ -std=c++17 -Wall -Wextra -Werror motion_blur.cpp tests/test_motion_blur.cpp -ldl -lEGL -lGLESv2 -o build/test-motion-blur
 LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-motion-blur
 ln -sfn ../assets build/assets
-clang++ -std=c++17 -Wall -Wextra -Werror -I/usr/include/freetype2 test_custom_font.cpp \
+clang++ -std=c++17 -Wall -Wextra -Werror -I/usr/include/freetype2 tests/test_custom_font.cpp \
     -ldl -lEGL -lGLESv2 -o build/test-custom-font
 LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-custom-font
 readelf -d build/libblank-client-menu.so

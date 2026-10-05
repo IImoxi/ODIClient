@@ -4,7 +4,7 @@
 #include <limits>
 #include <dlfcn.h>
 #include <sys/mman.h>
-#include "render.cpp"
+#include "../render.cpp"
 
 extern "C" void* mcpelauncher_host_dlopen(const char* name, int flags) { return dlopen(name, flags); }
 extern "C" void* mcpelauncher_host_dlsym(void* library, const char* name) { return dlsym(library, name); }

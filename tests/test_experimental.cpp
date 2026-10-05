@@ -1,8 +1,8 @@
 #include <cassert>
 #include <initializer_list>
-#include "popup.cpp"
-#include "experimental.h"
-#include "client_modules.h"
+#include "../popup.cpp"
+#include "../experimental.h"
+#include "../client_modules.h"
 
 bool menuVisible;
 bool custom_menu_is_visible() { return menuVisible; }

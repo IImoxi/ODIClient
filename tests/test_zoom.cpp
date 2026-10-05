@@ -5,7 +5,7 @@
 #include <dlfcn.h>
 #include <thread>
 #include <sys/mman.h>
-#include "zoom.cpp"
+#include "../zoom.cpp"
 constexpr auto buildNote = minecraft_build::current::buildNote;
 extern "C" void* mcpelauncher_host_dlopen(const char* name, int flags) { return dlopen(name, flags); }
 extern "C" void* mcpelauncher_host_dlsym(void* library, const char* name) { return dlsym(library, name); }

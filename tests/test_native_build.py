@@ -5,7 +5,7 @@ import struct
 import sys
 from pathlib import Path
 
-root = Path(__file__).resolve().parent
+root = Path(__file__).resolve().parent.parent
 profile = (root / 'minecraft_build.h').read_text()
 
 def integer(name):

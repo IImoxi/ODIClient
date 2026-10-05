@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
-#include "hook_manager.cpp"
+#include "../hook_manager.cpp"
 
 extern "C" void* mcpelauncher_host_dlopen(const char* path, int flags) { return dlopen(path, flags); }
 extern "C" void* mcpelauncher_host_dlsym(void* library, const char* name) { return dlsym(library, name); }

@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
-#include "custom_font.cpp"
+#include "../custom_font.cpp"
 
 extern "C" void* mcpelauncher_host_dlopen(const char* name, int flags) { return dlopen(name, flags); }
 extern "C" void* mcpelauncher_host_dlsym(void* lib, const char* name) { return dlsym(lib, name); }

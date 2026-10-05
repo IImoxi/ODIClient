@@ -6,8 +6,8 @@
 #include <cstdio>
 #include <initializer_list>
 #include <dlfcn.h>
-#include "motion_blur.h"
-#include "panel_renderer.h"
+#include "../motion_blur.h"
+#include "../panel_renderer.h"
 
 extern "C" void* mcpelauncher_host_dlopen(const char* name, int flags) { return dlopen(name, flags); }
 extern "C" void* mcpelauncher_host_dlsym(void* library, const char* name) { return dlsym(library, name); }

@@ -6,7 +6,7 @@
 #include <dlfcn.h>
 #include <cstdlib>
 #include <sys/mman.h>
-#include "auto_gg.cpp"
+#include "../auto_gg.cpp"
 static PopupCallback popupCallback;
 static void* popupContext;
 static bool popupBusy;

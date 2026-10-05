@@ -3,7 +3,7 @@
 #include <GLES3/gl3.h>
 #include <cassert>
 #include <dlfcn.h>
-#include "popup.h"
+#include "../popup.h"
 
 extern "C" void* mcpelauncher_host_dlopen(const char* name, int flags) { return dlopen(name, flags); }
 extern "C" void* mcpelauncher_host_dlsym(void* library, const char* name) { return dlsym(library, name); }

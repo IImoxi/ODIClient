@@ -1,4 +1,4 @@
-#include "ui_animation.h"
+#include "../ui_animation.h"
 #include <cassert>
 #include <cmath>
 

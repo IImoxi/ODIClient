@@ -3,7 +3,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <sys/mman.h>
-#include "particles.cpp"
+#include "../particles.cpp"
 extern "C" void* mcpelauncher_host_dlopen(const char* n, int f) { return dlopen(n,f); }
 extern "C" void* mcpelauncher_host_dlsym(void* l, const char* n) { return dlsym(l,n); }
 static bool saved;

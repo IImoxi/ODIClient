@@ -4,7 +4,7 @@
 #include <cstring>
 #include <unistd.h>
 #include <dlfcn.h>
-#include "skin_image.cpp"
+#include "../skin_image.cpp"
 static bool missingZlib = true, missingMaps = true;
 static FILE* mappedOpen(const char* path,const char* mode) {
     if (std::strcmp(path,"/proc/self/maps")) return std::fopen(path,mode);

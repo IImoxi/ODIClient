@@ -3,12 +3,12 @@
 #include <cstdio>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
-#include "launcher_api.h"
-#include "motion_blur.h"
-#include "analog_input.h"
-#include "auto_gg.h"
-#include "client_settings.h"
-#include "client_modules.h"
+#include "../launcher_api.h"
+#include "../motion_blur.h"
+#include "../analog_input.h"
+#include "../auto_gg.h"
+#include "../client_settings.h"
+#include "../client_modules.h"
 
 struct MockNativeWindow {
     virtual ~MockNativeWindow() = default;

@@ -9,7 +9,7 @@ target_dir=$(cd -- "$mods_dir/ODIClient/1.0.0/x86_64" && pwd -P)
 if [[ "$source_dir" != "$target_dir" ]]; then
     install -m 644 -- "$source_dir/libblank-client-menu.so" "$source_dir/mod.json" "$target_dir/"
 fi
-install -m 644 -- nuphy_analog.py nuphy_distance.py README.md render_research.md particles_research.md lobby_scanner_research.md "$target_dir/"
+install -m 644 -- nuphy_analog.py nuphy_distance.py README.md "$target_dir/"
 mkdir -p -- "$target_dir/assets"
 install -m 644 -- assets/inter.ttf "$target_dir/assets/"
 install -m 644 -- assets/icon-*.png "$target_dir/assets/"

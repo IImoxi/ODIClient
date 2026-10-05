@@ -1,7 +1,7 @@
 #include <cassert>
 #include <cstring>
 #include <cstdio>
-#include "autosprint.cpp"
+#include "../autosprint.cpp"
 struct NativeWindow { void** table; alignas(8) unsigned char callbacks[18 * 32]{}; };
 static NativeWindow window{};
 static void* handle = &window;
