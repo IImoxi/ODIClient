@@ -1,0 +1,142 @@
+#include "custom_menu.h"
+#include "client_modules.h"
+#include "client_settings.h"
+#include "auto_gg.h"
+#include "analog_input.h"
+#include "zoom.h"
+#include "render.h"
+#include "tablist.h"
+#include "particles.h"
+#include "experimental.h"
+
+namespace {
+void zoomMultiplier(int tenths, char* value) {
+    int n = 0, whole = tenths / 10;
+    if (whole >= 10) value[n++] = static_cast<char>('0' + whole / 10);
+    value[n++] = static_cast<char>('0' + whole % 10);
+    if (tenths % 10) {
+        value[n++] = '.';
+        value[n++] = static_cast<char>('0' + tenths % 10);
+    }
+    value[n++] = 'x'; value[n] = 0;
+}
+bool trailMode() { return !client_blur_average(); }
+}
+
+void declare_menu_pages() {
+    MenuPage experimentalPage = newPage("Experimental");
+    experimentalPage.toggle("Enable Experimental", client_set_experimental, client_experimental_enabled)
+        .button("Show test popup", experimental_show_test)
+        .text("Type test in chat (T) to show a yes/no prompt.")
+        .text("Hold left/right click for one second: yes/no.");
+    newTile("Experimental").opens(experimentalPage)
+        .onToggle(client_set_experimental, client_experimental_enabled);
+
+    MenuPage tablistPage = newPage("Tablist");
+    tablistPage.toggle("Enable Tablist", client_set_tablist, client_tablist_enabled)
+        .dropdown("Font", "Inter", "Mojangles", client_settings_set_tablist_mojangles,
+                  client_settings_get_tablist_mojangles).whenEnabled();
+    if (tablist_error()) tablistPage.text(tablist_error());
+    newTile("Tablist").opens(tablistPage).onToggle(client_set_tablist, client_tablist_enabled);
+
+    MenuPage particlesPage = newPage("Particles");
+    particlesPage.toggle("Enable Particles", client_set_particles, client_particles_enabled)
+        .text("Critical-hit particles when you attack a player.");
+    if (particles_error()) particlesPage.text(particles_error());
+    newTile("Particles").icon("assets/icon-particles.png").opens(particlesPage).onToggle(client_set_particles, client_particles_enabled);
+
+    MenuPage zoomPage = newPage("Zoom");
+    zoomPage.toggle("Enable Zoom", client_set_zoom, client_zoom_enabled)
+        .keyBind("Hold to zoom", client_set_zoom_key, client_zoom_key).whenEnabled()
+        .slider("Default zoom", 15, 300, client_set_zoom_default, client_zoom_default, zoomMultiplier).whenEnabled()
+        .slider("Scroll step", 1, 50, client_set_zoom_scroll, client_zoom_scroll, zoomMultiplier).whenEnabled()
+        .text("Hold key and scroll to adjust camera zoom.");
+    if (zoom_status()) zoomPage.text(zoom_status());
+    newTile("Zoom")
+        .icon("assets/icon-zoom.png")
+        .opens(zoomPage)
+        .onToggle(client_set_zoom, client_zoom_enabled);
+
+    MenuPage blurPage = newPage("Motion Blur");
+    blurPage.toggle("Enable Motion Blur", client_set_blur, client_blur_enabled)
+        .choice("Mode", "Trail", "FPS average", client_set_blur_average, client_blur_average).whenEnabled()
+        .slider("Strength (%)", 0, 80, client_set_blur_strength, client_blur_strength).whenEnabled(trailMode)
+        .slider("Target Hz", 30, 500,
+                client_set_blur_average_hz, client_blur_average_hz).whenEnabled(client_blur_average);
+    newTile("Motion Blur")
+        .opens(blurPage)
+        .icon("assets/icon-motionblur.png")
+        .onToggle(client_set_blur, client_blur_enabled);
+
+    MenuPage fpsPage = newPage("FPS Limiter");
+    fpsPage.toggle("Enable FPS Limiter", client_set_fps_limit, client_fps_limit_enabled)
+        .slider("FPS Limit", 30, 480, client_set_fps_value, client_fps_value).whenEnabled();
+    newTile("FPS Limiter")
+        .opens(fpsPage)
+        .icon("assets/icon-fpslimiter.png")
+        .onToggle(client_set_fps_limit, client_fps_limit_enabled);
+
+    MenuPage renderPage = newPage("Render");
+    renderPage.toggle("Enable Render", client_set_render, client_render_enabled)
+        .toggle("Cull below camera", client_set_render_below, client_render_below)
+        .slider("Blocks below", 16, 256, client_set_render_below_distance,
+                client_render_below_distance).whenEnabled()
+        .toggle("Cull above camera", client_set_render_above, client_render_above)
+        .slider("Blocks above", 16, 256, client_set_render_above_distance,
+                client_render_above_distance).whenEnabled()
+        .text("Experimental vertical terrain limits.")
+        .text("Can hide visible cliffs or cave openings.");
+    if (render_error()) renderPage.text(render_error());
+    newTile("Render").opens(renderPage).onToggle(client_set_render, client_render_enabled);
+
+    MenuPage sprintPage = newPage("Auto Sprint");
+    sprintPage.toggle("Enable Auto Sprint", client_set_sprint, client_sprint_enabled);
+    newTile("Auto Sprint")
+        .opens(sprintPage)
+        .onToggle(client_set_sprint, client_sprint_enabled);
+
+    MenuPage cursorPage = newPage("Center Cursor");
+    cursorPage.toggle("Enable Center Cursor", client_set_center_cursor, client_center_cursor_enabled)
+        .text("Center the pointer when a GUI releases mouse capture.");
+    newTile("Center Cursor").icon("assets/icon-cursor.png").opens(cursorPage)
+        .onToggle(client_set_center_cursor, client_center_cursor_enabled);
+
+    MenuPage analogPage = newPage("Analog WASD");
+    analogPage.toggle("Enable Analog WASD", client_set_analog, client_analog_enabled);
+    analogPage.text(analog_input_supported()
+        ? "Requires the NuPhy analog helper."
+        : "Analog WASD is unavailable on this system.");
+    newTile("Analog WASD")
+        .opens(analogPage)
+        .onToggle(client_set_analog, client_analog_enabled);
+
+    auto chatSettings = client_settings_get_chat_mods();
+    MenuPage chatPage = newPage("Chat mods");
+    chatPage.toggle("Enable Chat mods", client_set_chat_mods, client_chat_mods_enabled)
+        .toggle("Message blacklist", client_set_message_blacklist, client_message_blacklist)
+        .textBox("Keywords", chatSettings.keywords, client_set_chat_keywords, true).whenEnabled()
+        .text("Comma-separated keywords; Shift+Enter: new line.")
+        .text("Matching incoming messages are hidden.");
+    newTile("Chat mods").opens(chatPage).onToggle(client_set_chat_mods, client_chat_mods_enabled);
+
+    auto lobbyWatch = client_settings_get_lobby_watch();
+    MenuPage lobbyPage = newPage("Lobby Scanner");
+    lobbyPage.text("Run a command when a listed player joins the lobby.")
+        .toggle("Enable Lobby Scanner", client_set_lobby_watch, client_lobby_watch_enabled)
+        .textBox("Players / commands", lobbyWatch.rules, client_set_lobby_watch_rules).whenEnabled()
+        .text("steve/hub runs a command; steve#/hub sends chat.")
+        .text("steve?/hub asks; steve?#/hub asks to send chat.");
+    newTile("Lobby Scanner").opens(lobbyPage).onToggle(client_set_lobby_watch, client_lobby_watch_enabled);
+
+    char trigger[256], response[256];
+    auto_gg_get_text(trigger, response);
+    MenuPage autoGGPage = newPage("AutoGG");
+    autoGGPage.text("Automatic replies to matching chat.")
+        .toggle("Enable AutoGG", client_set_auto_gg, client_auto_gg_enabled)
+        .textBox("Trigger", trigger, auto_gg_set_trigger).whenEnabled()
+        .textBox("Text", response, auto_gg_set_response).whenEnabled();
+    newTile("AutoGG")
+        .icon("assets/icon-autogg.png")
+        .opens(autoGGPage)
+        .onToggle(client_set_auto_gg, client_auto_gg_enabled);
+}

@@ -1,0 +1,146 @@
+{
+  "name": "Crimson Dusk",
+  "version": "1.0.0",
+  "format": "custom semantic color palette",
+  "theme": "dark",
+  "description": "Warm charcoal, muted plum, rose accents and restrained crimson, extracted from the animated-character website CSS.",
+  "color_space": "sRGB",
+  "source": "anime-character/styles.css",
+  "tokens": {
+    "background": {
+      "hex": "#121216",
+      "name": "Midnight",
+      "role": "Default page background",
+      "css_variable": "--color-background"
+    },
+    "surface": {
+      "hex": "#1c1920",
+      "name": "Smoked plum",
+      "role": "Quiet panels; outer ambient glow",
+      "css_variable": "--color-surface"
+    },
+    "surface-raised": {
+      "hex": "#292128",
+      "name": "Plum charcoal",
+      "role": "Buttons, cards and elevated panels",
+      "css_variable": "--color-surface-raised"
+    },
+    "glow": {
+      "hex": "#32212b",
+      "name": "Burgundy haze",
+      "role": "Center of a restrained decorative glow",
+      "css_variable": "--color-glow"
+    },
+    "border": {
+      "hex": "#4b343e",
+      "name": "Muted wine",
+      "role": "Subtle decorative separators and borders",
+      "css_variable": "--color-border"
+    },
+    "text": {
+      "hex": "#f5eeee",
+      "name": "Warm ivory",
+      "role": "Headings and primary text",
+      "css_variable": "--color-text"
+    },
+    "text-muted": {
+      "hex": "#aaa5ae",
+      "name": "Dusty lilac",
+      "role": "Supporting body copy",
+      "css_variable": "--color-text-muted"
+    },
+    "text-on-action": {
+      "hex": "#faf4f5",
+      "name": "Rose white",
+      "role": "Labels on crimson actions and dark buttons",
+      "css_variable": "--color-text-on-action"
+    },
+    "text-soft": {
+      "hex": "#d1b3bc",
+      "name": "Mauve blush",
+      "role": "Status labels and soft secondary emphasis",
+      "css_variable": "--color-text-soft"
+    },
+    "accent": {
+      "hex": "#dd8795",
+      "name": "Soft rose",
+      "role": "Small labels, links and accent text",
+      "css_variable": "--color-accent"
+    },
+    "action": {
+      "hex": "#ae334e",
+      "name": "Crimson",
+      "role": "Primary buttons and selected states",
+      "css_variable": "--color-action"
+    },
+    "action-border": {
+      "hex": "#de647d",
+      "name": "Bright rose",
+      "role": "Selected-control outline",
+      "css_variable": "--color-action-border"
+    },
+    "indicator": {
+      "hex": "#cf5973",
+      "name": "Raspberry",
+      "role": "Small status dots and decorative accents",
+      "css_variable": "--color-indicator"
+    },
+    "code": {
+      "hex": "#e7b2be",
+      "name": "Pale blush",
+      "role": "Inline code and technical highlights",
+      "css_variable": "--color-code"
+    },
+    "focus": {
+      "hex": "#f4a8b9",
+      "name": "Rose light",
+      "role": "Visible keyboard focus rings",
+      "css_variable": "--color-focus"
+    }
+  },
+  "gradients": {
+    "ambient": {
+      "css": "radial-gradient(ellipse at center, #32212b 0%, #1c1920 40%, transparent 70%)",
+      "role": "Decorative spotlight behind focal content"
+    }
+  },
+  "ai_instructions": [
+    "Use a dark theme with warm, slightly pink whites and muted plum surfaces.",
+    "Use background for the page; surface or surface-raised for cards and controls.",
+    "Use text for primary copy and text-muted for supporting copy. Use text-on-action over action.",
+    "Use action sparingly for primary calls to action and selected states; use accent for links and small highlights.",
+    "Keep large areas dark. Do not use crimson as a full-page background.",
+    "Use the glow gradient only as a subtle decorative effect behind focal content.",
+    "Keep keyboard focus visible using focus. Border is decorative and low contrast; do not rely on it alone to identify an essential control.",
+    "Do not invent light-mode, hover, success, warning or error colors from these values without marking them as extensions. These were not present in the original website.",
+    "Do not treat indicator as a semantic error color: it was a decorative status dot in the original design.",
+    "Preserve the supplied hex values when reproducing this palette."
+  ],
+  "text_pairings": [
+    {
+      "foreground": "text",
+      "background": "background",
+      "contrast_ratio": 16.33
+    },
+    {
+      "foreground": "text-muted",
+      "background": "background",
+      "contrast_ratio": 7.74
+    },
+    {
+      "foreground": "text-muted",
+      "background": "surface-raised",
+      "contrast_ratio": 6.48
+    },
+    {
+      "foreground": "accent",
+      "background": "background",
+      "contrast_ratio": 7.1
+    },
+    {
+      "foreground": "text-on-action",
+      "background": "action",
+      "contrast_ratio": 5.71
+    }
+  ]
+}

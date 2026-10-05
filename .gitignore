@@ -1,0 +1,31 @@
+# Build output and installed copies; keep the launcher package manifest.
+/build/
+/1.0.0/x86_64/*
+!/1.0.0/x86_64/mod.json
+*.o
+*.so
+
+# Personal settings, temporary atomic saves, and exported skins.
+odiclient.conf
+odiclient.conf.tmp
+autogg.conf
+autogg.conf.tmp
+/skins/
+
+# Python caches and local virtual environments.
+__pycache__/
+*.py[cod]
+/.venv/
+
+# Local tool state and credentials.
+/.agents/
+/.codex/
+/.aws/
+
+# Distribution archives, editor leftovers, and crash dumps.
+/ODIclient-*.tar.gz
+*.swp
+*.swo
+*~
+/core
+/core.*
