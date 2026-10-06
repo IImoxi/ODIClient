@@ -5,17 +5,24 @@ struct GameWindowHandle;
 class MenuPage {
 public:
     MenuPage& text(const char* value);
+    // Omit the divider before the last item to visually join it to the previous item.
+    // Consecutive descriptions or sliders in the same parent group join automatically.
+    MenuPage& groupWithPrevious();
     MenuPage& button(const char* label, void (*onClick)() = nullptr);
+    // Shared boolean switch: left label, animated glass thumb with X/check icons.
     MenuPage& toggle(const char* label, void (*onChange)(bool), bool (*getValue)());
-    // Optional formatter writes a value label to a 16-byte buffer.
+    // Optional formatter writes a value label to a 16-byte buffer. Step snaps to min + n*step.
     MenuPage& slider(const char* label, int min, int max, void (*onChange)(int), int (*getValue)(),
-                     void (*formatValue)(int, char*) = nullptr);
+                     void (*formatValue)(int, char*) = nullptr, int step = 1);
+    // Shared four-corner selector: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right.
+    MenuPage& anchor(const char* label, void (*onChange)(int), int (*getValue)());
     MenuPage& keyBind(const char* label, void (*onChange)(int), int (*getValue)());
     MenuPage& choice(const char* label, const char* first, const char* second,
                      void (*onChange)(bool), bool (*getValue)());
     MenuPage& dropdown(const char* label, const char* first, const char* second,
                        void (*onChange)(bool), bool (*getValue)());
-    // Nest the last control inside the preceding toggle; visible only when enabled.
+    // Group the last control under the preceding root toggle; visible only when enabled.
+    // Dependent toggles do not start another group. Visible rows get dividers automatically.
     MenuPage& whenEnabled(bool (*isVisible)() = nullptr);
     MenuPage& textBox(const char* label, const char* initialValue = "",
                       void (*onChange)(const char*) = nullptr, bool multiline = false);

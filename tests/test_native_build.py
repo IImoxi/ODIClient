@@ -97,6 +97,111 @@ for address, signature in (('listCallback', 'listEntry'), ('listCaptureSite', 'l
     assert read(integer(address), len(array(signature))) == array(signature)
 print('PASS: Render callback slot, closure captures, output selection, and terrain-list consumption')
 
+for address, signature in (('prepareFunction', 'prepareFunctionSignature'),
+                           ('prepareCall', 'prepareCallSignature'),
+                           ('prepareArguments', 'prepareArgumentsSignature')):
+    assert read(integer(address), len(array(signature))) == array(signature)
+prepare_call = integer('prepareCall')
+assert prepare_call + 5 + struct.unpack('<i', read(prepare_call + 1, 4))[0] == integer('prepareFunction')
+gl_profile = re.search(r'namespace glTrace \{(.*?)\n\}\n', profile, re.S)[1]
+gl_slots = [int(value, 16) for value in re.findall(r'0x[0-9a-f]+', re.search(r'slots\[\] = \{(.*?)\}', gl_profile)[1])]
+gl_plt = [int(value, 16) for value in re.findall(r'0x[0-9a-f]+', re.search(r'plt\[\] = \{(.*?)\}', gl_profile)[1])]
+gl_signatures = [bytes(int(value, 16) for value in re.findall(r'0x[0-9a-f]+', body))
+                 for body in re.findall(r'\{([^{}]+)\}', re.search(r'pltSignatures\[4\]\[6\] = \{(.*?)\};', gl_profile, re.S)[1])]
+assert len(gl_slots) == len(gl_plt) == len(gl_signatures) == 4
+for slot, plt, signature in zip(gl_slots, gl_plt, gl_signatures):
+    assert read(plt, 6) == signature
+    assert plt + 6 + struct.unpack('<i', signature[2:])[0] == slot
+# Confirm jump-slot relocation symbols, rather than treating GOT offsets as names.
+expected_imports = dict(zip(gl_slots, ('glDrawArrays', 'glDrawElements', 'glBufferData', 'glBufferSubData')))
+found_imports = {}
+for section in sections:
+    if section[1] != 4: continue
+    symbols = sections[section[6]]
+    strings = sections[symbols[6]]
+    for offset in range(section[4], section[4] + section[5], 24):
+        address, info, _ = struct.unpack_from('<QQq', image, offset)
+        if address not in expected_imports: continue
+        assert info & 0xffffffff == 7  # R_X86_64_JUMP_SLOT
+        symbol = symbols[4] + (info >> 32) * symbols[9]
+        name_offset = struct.unpack_from('<I', image, symbol)[0] + strings[4]
+        found_imports[address] = image[name_offset:image.find(b'\0', name_offset)].decode()
+assert found_imports == expected_imports
+print('PASS: Terrain preparation caller/argument ABI and GL diagnostic import symbols/PLT slots')
+
+# Both whole native fallback loops and their RIP-relative single-draw targets.
+gpu_profile = re.search(r'namespace gpuMultidraw \{(.*?)\n\}\n', profile, re.S)[1]
+def gpu_values(name):
+    return [int(value, 0) for value in re.findall(r'0x[0-9a-f]+|(?<![\w])\d+',
+        re.search(rf'{name}\[2\] = \{{(.*?)\}}', gpu_profile, re.S)[1])]
+gpu_signatures = [bytes(int(value, 16) for value in re.findall(r'0x[0-9a-f]+', body))
+    for body in re.findall(r'\{([^{}]+)\}',
+        re.search(r'fallbackSignatures\[2\]\[69\] = \{(.*?)\};', gpu_profile, re.S)[1])]
+for address, size, slot, signature, call_offset in zip(gpu_values('fallback'), gpu_values('fallbackSizes'),
+        gpu_values('singleSlots'), gpu_signatures, (0x26, 0x29)):
+    assert len(signature) == size and read(address, size) == signature
+    call = address + call_offset
+    assert read(call, 2) == b'\xff\x15'
+    assert call + 6 + struct.unpack('<i', read(call+2, 4))[0] == slot
+# Verified renderer callers pass a 32-byte stride into the fallback dispatch slots.
+for address, signature in (('gpuArraysCaller', 'gpuArraysCallerSignature'),
+                           ('gpuElementsCaller', 'gpuElementsCallerSignature'),
+                           ('gpuFallbackSetup', 'gpuFallbackSetupSignature')):
+    assert read(integer(address), len(array(signature))) == array(signature)
+print('PASS: GPU multidraw native loops, indirect targets, stride-32 callers and fallback initialization')
+
+# Shader-uniform imports used by the native decoder and lifecycle invalidation.
+uniform_profile = re.search(r'namespace uniformCache \{(.*?)\n\}\n', profile, re.S)[1]
+def uniform_addresses(name):
+    return [int(value, 16) for value in re.findall(r'0x[0-9a-f]+',
+        re.search(rf'{name}\[9\] = \{{(.*?)\}}', uniform_profile)[1])]
+uniform_signatures = [bytes(int(value, 16) for value in re.findall(r'0x[0-9a-f]+', body))
+    for body in re.findall(r'\{([^{}]+)\}',
+        re.search(r'pltSignatures\[9\]\[6\] = \{(.*?)\};', uniform_profile, re.S)[1])]
+for slot, plt, signature in zip(uniform_addresses('slots'), uniform_addresses('plt'), uniform_signatures):
+    assert read(plt, 6) == signature and plt+6+struct.unpack('<i', signature[2:])[0] == slot
+uniform_imports = dict(zip(uniform_addresses('slots'), ('glUniformMatrix4fv', 'glLinkProgram', 'glDeleteProgram',
+    'glUniform4fv', 'glUniformMatrix3fv', 'glUniform1i', 'glUseProgram', 'glUniform1iv', 'eglMakeCurrent')))
+for section in sections:
+    if section[1] != 4: continue
+    symbols = sections[section[6]]; strings = sections[symbols[6]]
+    for offset in range(section[4], section[4]+section[5], 24):
+        address, info, _ = struct.unpack_from('<QQq', image, offset)
+        if address not in uniform_imports: continue
+        assert info & 0xffffffff == 7
+        symbol = symbols[4]+(info >> 32)*symbols[9]
+        name_offset = struct.unpack_from('<I', image, symbol)[0]+strings[4]
+        assert image[name_offset:image.find(b'\0', name_offset)].decode() == uniform_imports.pop(address)
+assert not uniform_imports
+for name in ('uniformVecDecoder', 'uniformMatrixDecoder'):
+    assert read(integer(name), len(array(name+'Signature'))) == array(name+'Signature')
+print('PASS: Uniform cache import symbols, PLT gates, decoder calls and program lifecycle imports')
+
+# Native GL submission entry/ABI and presentation import.
+assert relocations[integer('submitSlot')] == integer('submitFunction')
+assert integer('submitSlot') == integer('submitVtable')+integer('submitInvokeOffset')
+assert integer('submitCtor')+7+struct.unpack('<i',read(integer('submitCtor')+3,4))[0] == integer('submitVtable')
+assert struct.unpack('<I',array('submitCallerSignature')[-4:])[0] == integer('submitInvokeOffset')
+for address, signature in (('submitFunction','submitSignature'), ('submitCaller','submitCallerSignature'),
+                           ('submitCtor','submitCtorSignature'), ('submitReturn','submitReturnSignature'),
+                           ('swapPlt','swapSignature')):
+    assert read(integer(address),len(array(signature))) == array(signature)
+assert integer('swapPlt')+6+struct.unpack('<i',array('swapSignature')[2:])[0] == integer('swapSlot')
+found_swap=False
+swap_slot=integer('swapSlot')
+for section in sections:
+    if section[1] != 4: continue
+    symbols=sections[section[6]]; strings=sections[symbols[6]]
+    for offset in range(section[4],section[4]+section[5],24):
+        address,info,_=struct.unpack_from('<QQq',image,offset)
+        if address!=swap_slot: continue
+        assert info & 0xffffffff == 7
+        name_offset=struct.unpack_from('<I',image,symbols[4]+(info >> 32)*symbols[9])[0]+strings[4]
+        assert image[name_offset:image.find(b'\0',name_offset)].decode() == 'eglSwapBuffers'
+        found_swap=True
+assert found_swap
+print('PASS: Native GL submit vtable/entry/caller ABI and EGL presentation import')
+
 # Player roster, skin updates, and world lifecycle dispatchers.
 def integers(name):
     body = re.search(r'\b' + name + r'\[\] = \{(.*?)\};', profile, re.S)[1]
@@ -135,3 +240,10 @@ for table, expected in (('localPlayerTable', b'11LocalPlayer\0'),
     info = relocations[integer(table) - 8]
     assert read(relocations[info + 8], len(expected)) == expected
 print('PASS: Particles attack slots/thunks, LocalPlayer/RemotePlayer RTTI, and native critical-hit emitter')
+
+for table, function in zip(addresses('fogTables'), addresses('fogFunctions')):
+    assert relocations[table + integer('fogSlot')] == function
+assert relocations[addresses('fogTables')[0] + integer('angleSlot')] == integer('angleFunction')
+for name in ('fogOverworld', 'fogPassthrough', 'angleEntry', 'fogCaller', 'angleCaller'):
+    assert read(integer(name + 'Site'), len(array(name + 'Signature'))) == array(name + 'Signature')
+print('PASS: Environment Dimension slots, color return ABI, celestial-angle ticks, and native callers')

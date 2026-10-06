@@ -7,6 +7,8 @@
 #include <cstring>
 #include <cstdio>
 #include <dlfcn.h>
+#include <string>
+#include <vector>
 #include "../custom_menu.cpp"
 
 static long long testFrameNs = 1000000000LL;
@@ -38,7 +40,7 @@ static int getTargetHz() { return targetHz; }
 void declare_menu_pages() {
     newTile("Test").opens(newPage("Test").textBox("Text"));
     MenuPage extra = newPage("More controls");
-    for (int i = 0; i < 5; ++i) extra.text("First view");
+    for (int i = 0; i < 5; ++i) extra.button("First view");
     extra.slider("Wide range", INT_MIN, INT_MAX, setTestSlider, getTestSlider)
         .button("Back", custom_menu_back_to_tiles)
         .textBox("More text", "Initial value");
@@ -59,6 +61,9 @@ static char renderedSuffix[65];
 static float rasterScale = 1.0f;
 static int descriptionX, descriptionRasterHeight;
 static float descriptionHeight;
+static int childToggleLabelX, childSliderLabelX;
+struct TextDraw { std::string text; int rasterHeight; float displayHeight; };
+static std::vector<TextDraw> pageTextDraws;
 bool custom_font_draw(const char* text, int x, int top, int height, int, int) {
     if (std::strncmp(text, "ODIClient", 9) == 0) {
         std::strncpy(renderedHeader, text, sizeof(renderedHeader) - 1);
@@ -69,6 +74,8 @@ bool custom_font_draw(const char* text, int x, int top, int height, int, int) {
     return true;
 }
 bool custom_font_draw_left(const char* text, int x, int top, int height, int width, int screenHeight) {
+    if (std::strcmp(text, "Horizontal") == 0) childToggleLabelX = x;
+    if (std::strncmp(text, "Distance:", 9) == 0) childSliderLabelX = x;
     if (std::strcmp(text, "Description") == 0) {
         descriptionX = x;
         descriptionHeight = height;
@@ -84,9 +91,16 @@ bool custom_font_draw_left(const char* text, int x, int top, int height, int wid
 }
 bool custom_font_draw_left_scaled(const char* text, float x, float top, int height,
                                   float scale, int width, int screenHeight) {
+    pageTextDraws.push_back({text, height, height * scale});
     bool drawn = custom_font_draw_left(text, x, top, height, width, screenHeight);
     if (std::strcmp(text, "Description") == 0) descriptionHeight = height * scale;
     return drawn;
+}
+bool custom_font_draw_scaled(const char* text, float x, float top, int height,
+                             float scale, int width, int screenHeight, bool centered) {
+    if (!centered) return custom_font_draw_left_scaled(text, x, top, height, scale, width, screenHeight);
+    pageTextDraws.push_back({text, height, height * scale});
+    return custom_font_draw(text, x, top, height, width, screenHeight);
 }
 int custom_font_text_width(const char* text, int height) {
     int count = 0;
@@ -97,7 +111,14 @@ void custom_font_set_opacity(float opacity) { fontOpacity = opacity; }
 void custom_font_set_raster_scale(float scale) { rasterScale = scale; }
 void custom_font_set_clip(bool) {}
 static float iconRed, iconGreen, iconBlue;
-bool custom_font_draw_icon(const char*, int, int, int, float red, float green, float blue, int, int) {
+static int switchIconX;
+static int switchIconSize;
+static float switchCheckOpacity, switchCrossOpacity;
+bool custom_font_draw_icon(const char* path, int x, int, int size, float red, float green, float blue, int, int) {
+    if (std::strcmp(path, "assets/icon-switch-check.png") == 0) {
+        switchIconX = x; switchIconSize = size; switchCheckOpacity = fontOpacity;
+    }
+    if (std::strcmp(path, "assets/icon-switch-cross.png") == 0) switchCrossOpacity = fontOpacity;
     iconRed = red; iconGreen = green; iconBlue = blue;
     return true;
 }
@@ -363,7 +384,8 @@ int main(int argc, char** argv) {
     assert(drawnControls.multiline[0]);
     int multilineHeight;
     textFieldRect(0, lastScreenHeight, x, top, width, multilineHeight);
-    assert(multilineHeight == panelHeight * 15 / 100 - panelHeight * 3 / 100);
+    assert(multilineHeight == panelHeight * (menu_style::rowHeightPercent + menu_style::textLineHeightPercent) / 100
+        - panelHeight * 3 / 100);
     // Inspect the actual caret pixels using the same frame drawing path.
     MenuFrame caretFrame;
     caretFrame.page = pages[0]; caretFrame.pageIndex = 0; caretFrame.focused = 0;
@@ -442,7 +464,19 @@ int main(int argc, char** argv) {
     assert(drawnControls.count == 5 && drawnControls.rows[2] == 2 && drawnControls.rows[3] == 3);
     assert(drawnControls.rows[4] == 4 && drawnControls.viewCount == 1);
     glReadPixels(gapX, gapY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-    assert(pixel[0] > 30); // Expanded children share the parent's bubble, including the gap.
+    assert(pixel[0] < 30); // Enabling a master adds no filled bubble in the gap.
+    glReadPixels(x + 5, lastScreenHeight - (top + height / 2) - 1,
+                 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    assert(pixel[0] < 30); // The master row itself has no background.
+    int childX, childTop, childWidth, childHeight;
+    pageItemRect(2, lastScreenHeight, childX, childTop, childWidth, childHeight);
+    int dividerY = lastScreenHeight - (top + height + childTop) / 2 - 1;
+    glReadPixels(x + 5, dividerY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    assert(pixel[0] > 30 && pixel[0] == pixel[1] && pixel[1] == pixel[2]);
+    for (int offset = -1; offset <= 1; offset += 2) {
+        glReadPixels(x + 5, dividerY + offset, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        assert(pixel[0] < 30); // Divider remains exactly one framebuffer pixel tall.
+    }
     sliderTrackRect(2, lastScreenHeight, x, top, width, height);
     click(x + width / 2, top + height / 2);
     assert(averagingEnabled && targetHzChanges == 1 && targetHz == 265); // Child clicks do not toggle the parent.
@@ -464,6 +498,46 @@ int main(int argc, char** argv) {
     renderAt(3500000000LL);
     assert(draggingSlider == -1);
     assert(onMouseButton(nullptr, x, top, leftMouseButton, 1));
+
+    // The shared switch also works inside a root group, with independently gated children.
+    MenuPage switchPage = newPage("Switches");
+    switchPage.toggle("Enable", setAveraging, getAveraging)
+        .toggle("Horizontal", [](bool value) { testModuleEnabled = value; }, getTestModule).whenEnabled()
+        .slider("Distance", 30, 500, setTargetHz, getTargetHz).whenEnabled(getTestModule).groupWithPrevious();
+    assert(!custom_menu_build_error());
+    activePage = 3; controlView = 0;
+    averagingEnabled = true; testModuleEnabled = false;
+    renderAt(3500000000LL);
+    assert(drawnControls.offsetsPercent[1] == menu_style::rowStridePercent);
+    assert(drawnControls.count == 2 && pages[3].items[1].parentToggle == 0);
+    assert(switchCrossOpacity == menuOpacity && switchCheckOpacity == 0);
+    int offX = switchIconX;
+    pageItemRect(1, lastScreenHeight, x, top, width, height);
+    assert(childToggleLabelX == x);
+    int switchPadding = panelHeight * 6 / 100 / 10;
+    if (switchPadding < 1) switchPadding = 1;
+    assert(offX - switchIconSize / 2 + switchIconSize * 2 + switchPadding == x + width);
+    click(x + width * 90 / 100, top + height / 2);
+    assert(testModuleEnabled && averagingEnabled);
+    renderAt(3500000000LL);
+    assert(drawnControls.count == 3 && pages[3].items[2].parentToggle == 0);
+    assert(pages[3].items[2].groupWithPrevious && !drawnControls.dividers[2]);
+    assert(childSliderLabelX == childToggleLabelX);
+    assert(drawnControls.offsetsPercent[2] - drawnControls.offsetsPercent[1] == menu_style::rowStridePercent);
+    renderAt(3590000000LL);
+    assert(switchIconX > offX && switchCheckOpacity > 0 && switchCrossOpacity > 0);
+    int movingX = switchIconX;
+    click(x + width * 90 / 100, top + height / 2); // Reverse without a thumb jump.
+    renderAt(3590000000LL);
+    assert(switchIconX == movingX && !testModuleEnabled && averagingEnabled);
+    assert(drawnControls.count == 2);
+    renderAt(3770000000LL);
+    assert(switchIconX == offX && switchCheckOpacity == 0 && switchCrossOpacity == menuOpacity);
+    pageItemRect(0, lastScreenHeight, x, top, width, height);
+    click(x + width / 2, top + height / 2); // Labels and switches share the row's hit area.
+    renderAt(3770000000LL);
+    assert(!averagingEnabled && drawnControls.count == 1);
+    --pageCount; activePage = 2;
 
     // A mode choice stays inside its master and selects the clicked option.
     Page& modePage = pages[2];
@@ -501,12 +575,20 @@ int main(int argc, char** argv) {
     renderAt(3500000000LL);
     assert(drawnControls.count == 1 && drawnControls.rows[1] == -1);
 
+    if (argc > 1 && std::strcmp(argv[1], "--switch") == 0) {
+        std::puts("PASS: switch icons/slide/reversal, unfilled masters, 1px dividers, row clicks, dependent toggles, conditional sliders, and named mode choices");
+        return 0;
+    }
+
     Page oversized{};
     oversized.itemCount = pageItemCapacity;
     oversized.items[0].parentToggle = -1;
     oversized.items[0].type = pageToggle;
     oversized.items[0].getToggle = getAveraging;
-    for (int child = 1; child < pageItemCapacity; ++child) oversized.items[child].parentToggle = 0;
+    for (int child = 1; child < pageItemCapacity; ++child) {
+        oversized.items[child].parentToggle = 0;
+        oversized.items[child].type = pageButton;
+    }
     averagingEnabled = true;
     for (int offset = 0; offset <= 11; ++offset) {
         ControlLayout continued = layoutControls(oversized, 2, offset);
@@ -525,27 +607,188 @@ int main(int argc, char** argv) {
     descriptionFrame.page.itemCount = 1;
     descriptionFrame.page.items[0].type = pageText;
     descriptionFrame.page.items[0].label = "Description";
-    descriptionFrame.controls.count = 1;
-    descriptionFrame.controls.indices[0] = 0;
+    descriptionFrame.page.items[0].parentToggle = -1;
+    descriptionFrame.page.itemCount = 2;
+    descriptionFrame.page.items[1] = descriptionFrame.page.items[0];
+    drawnControls = layoutControls(descriptionFrame.page, 2, 0);
+    assert(drawnControls.offsetsPercent[1] == menu_style::descriptionRowStridePercent);
+    assert(drawnControls.viewCount == 1);
+    assert(!drawnControls.dividers[0] && !drawnControls.dividers[1]);
+    Page sliderGroup = descriptionFrame.page;
+    sliderGroup.items[0].type = sliderGroup.items[1].type = pageSlider;
+    sliderGroup.itemCount = 3;
+    sliderGroup.items[2].type = pageToggle;
+    sliderGroup.items[2].parentToggle = -1;
+    ControlLayout groupedSliders = layoutControls(sliderGroup, 2, 0);
+    assert(!groupedSliders.dividers[1] && groupedSliders.dividers[2]);
+    sliderGroup.items[0].parentToggle = 2;
+    sliderGroup.items[2].getToggle = getAveraging;
+    averagingEnabled = true;
+    assert(layoutControls(sliderGroup, 2, 0).dividers[1]); // Different parent groups keep their boundary.
+    descriptionFrame.controls = drawnControls;
+    Page grouped = descriptionFrame.page;
+    grouped.itemCount = 3;
+    grouped.items[2].parentToggle = -1;
+    grouped.items[2].type = pageToggle;
+    assert(layoutControls(grouped, 2, 0).dividers[2]); // Boundary after the text group.
+    grouped.items[1].parentToggle = 0;
+    grouped.items[0].type = pageToggle;
+    grouped.items[0].getToggle = getAveraging;
+    averagingEnabled = true;
+    assert(layoutControls(grouped, 2, 0).dividers[1]); // Different parents stay distinct.
+    grouped.items[2].groupWithPrevious = true;
+    assert(!layoutControls(grouped, 2, 0).dividers[2]);
+    averagingEnabled = false;
+    assert(layoutControls(grouped, 2, 0).dividers[2]); // Hidden items do not join unrelated rows.
     int savedDescriptionHeight = panelHeight;
     int savedDescriptionWidth = panelWidth;
     for (int zoomHeight = 150; zoomHeight <= 200; ++zoomHeight) {
         panelHeight = zoomHeight;
         panelWidth = zoomHeight * 4 / 3;
+        glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
         drawPageControls(descriptionFrame, 800, 600, 200);
         pageItemRect(0, 600, x, top, width, height);
         assert(descriptionX == x + width * 3 / 100);
-        float expectedDescriptionHeight = 6 * zoomHeight / 200.0f;
+        assert(height == panelHeight * menu_style::descriptionRowHeightPercent / 100);
+        float expectedDescriptionHeight = 4 * zoomHeight / 200.0f;
         assert(descriptionHeight > expectedDescriptionHeight - 0.0001f
             && descriptionHeight < expectedDescriptionHeight + 0.0001f);
-        assert(descriptionRasterHeight == 6);
+        assert(descriptionRasterHeight == 4);
+        int nextX, nextTop, nextWidth, nextHeight;
+        pageItemRect(1, 600, nextX, nextTop, nextWidth, nextHeight);
+        int gapY = 600 - (top + height + nextTop) / 2 - 1;
+        glReadPixels(x + width / 2, gapY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        assert(pixel[0] == 0); // No divider between the two description rows.
     }
     panelHeight = savedDescriptionHeight;
     panelWidth = savedDescriptionWidth;
     custom_font_set_raster_scale(1.0f);
+    // Every settings text path keeps its settled atlas while its geometry scales.
+    MenuFrame fontsFrame{};
+    fontsFrame.pageIndex = 0; fontsFrame.focused = -1; fontsFrame.binding = -1;
+    fontsFrame.page.itemCount = 9;
+    const PageItemType fontTypes[] = {pageText, pageToggle, pageButton, pageSlider, pageTextBox,
+                                     pageChoice, pageKeyBind, pageDropdown, pageAnchor};
+    const char* fontLabels[] = {"Description", "Toggle", "Button", "Range", "Field",
+                                "Choice", "Key", "Font", "Anchor"};
+    for (int i = 0; i < 9; ++i) {
+        auto& item = fontsFrame.page.items[i];
+        item.type = fontTypes[i]; item.label = fontLabels[i]; item.parentToggle = -1;
+        item.choices[0] = "One"; item.choices[1] = "Two";
+        item.sliderMin = 0; item.sliderMax = 100; item.sliderStep = 1;
+        item.getSlider = getTestSlider;
+    }
+    std::strcpy(fontsFrame.page.items[4].value, "typed");
+    testSliderValue = 50;
+    fontsFrame.controls = layoutControls(fontsFrame.page, 0, 0);
+    drawnControls = fontsFrame.controls;
+    panelHeight = 200; panelWidth = 266;
+    pageTextDraws.clear(); drawPageControls(fontsFrame, 800, 600, 200, 266);
+    auto settledText = pageTextDraws;
+    assert(settledText.size() >= 12);
+    for (int step = 0; step <= 100; ++step) {
+        float scale = 0.75f + step * 0.0025f;
+        panelHeight = static_cast<int>(200 * scale); panelWidth = static_cast<int>(266 * scale);
+        pageTextDraws.clear(); drawPageControls(fontsFrame, 800, 600, 200, 266, scale);
+        assert(pageTextDraws.size() == settledText.size());
+        for (unsigned int i = 0; i < settledText.size(); ++i) {
+            assert(pageTextDraws[i].text == settledText[i].text);
+            assert(pageTextDraws[i].rasterHeight == settledText[i].rasterHeight);
+            float expected = settledText[i].displayHeight * scale;
+            assert(pageTextDraws[i].displayHeight > expected - 0.0001f
+                   && pageTextDraws[i].displayHeight < expected + 0.0001f);
+        }
+        assert(pageTextScale == 1.0f && !pageTextHeight && !pageTextWidth);
+    }
+    panelHeight = savedDescriptionHeight; panelWidth = savedDescriptionWidth;
+    drawnControls = descriptionFrame.controls;
+    if (argc > 1 && std::strcmp(argv[1], "--descriptions") == 0) {
+        std::puts("PASS: fixed font atlases and continuous scaling for all settings controls, grouped descriptions, compact settings spacing, aligned child controls, and switch/input regressions");
+        return 0;
+    }
+    // Shared stepped sliders and four-corner anchor selector, with real GL pixels.
+    MenuPage anchorPage = newPage("Anchors");
+    anchorPage.toggle("Enable", setAveraging, getAveraging)
+        .slider("Update", 250, 2000, setTestSlider, getTestSlider, nullptr, 250).whenEnabled()
+        .anchor("Anchor", setTestSlider, getTestSlider).whenEnabled()
+        .text("After anchor");
+    assert(pageCount == 4 && pages[3].items[2].type == pageAnchor);
+    averagingEnabled = true;
+    activePage = 3; controlView = 0; scrollPosition = 0;
+    __atomic_store_n(&open, true, __ATOMIC_RELAXED);
+    __atomic_store_n(&openingCaptureReady, true, __ATOMIC_RELAXED);
+    settingsTransition = {};
+    drawnControls = layoutControls(pages[3], 3, 0);
+    assert(drawnControls.anchors[2] && drawnControls.parents[2] == 0);
+    pageItemRect(2, 600, x, top, width, height);
+    int afterX, afterTop, afterWidth, afterHeight;
+    pageItemRect(3, 600, afterX, afterTop, afterWidth, afterHeight);
+    assert(afterTop > top + height); // Taller anchor row participates in layout.
+    sliderTrackRect(1, 600, x, top, width, height);
+    for (int value = 250; value <= 2000; value += 250) {
+        MenuAction action;
+        updateSlider(1, x + width * (value - 250) / 1750.0, action);
+        action.run(); assert(testSliderValue == value);
+    }
+    MenuAction snapAction;
+    updateSlider(1, x + width * 0.51, snapAction); snapAction.run();
+    assert(testSliderValue == 1250);
+    updateSlider(1, x - 100, snapAction); snapAction.run(); assert(testSliderValue == 250);
+    updateSlider(1, x + width + 100, snapAction); snapAction.run(); assert(testSliderValue == 2000);
+    for (int corner = 0; corner < 4; ++corner) {
+        anchorDotRect(2, 600, corner, x, top, width, height);
+        testSliderValue = -1;
+        MenuAction action;
+        assert(handleMouseButton(x + width / 2, top + height / 2, leftMouseButton, mousePress, action));
+        action.run(); assert(testSliderValue == corner && draggingSlider == -1);
+    }
+    // Hover highlights an unselected dot, and the selected dot is brightest.
+    testSliderValue = 0;
+    MenuFrame anchorFrame;
+    anchorFrame.pageIndex = 3; anchorFrame.page = pages[3]; anchorFrame.controls = drawnControls;
+    anchorFrame.cursorValid = true;
+    anchorDotRect(2, 600, 1, x, top, width, height);
+    anchorFrame.cursorX = x + width / 2; anchorFrame.cursorY = top + height / 2;
+    glDisable(GL_SCISSOR_TEST); glClear(GL_COLOR_BUFFER_BIT); menuOpacity = 1;
+    drawPageControls(anchorFrame, 800, 600);
+    int dotBrightness[4];
+    for (int corner = 0; corner < 4; ++corner) {
+        anchorDotRect(2, 600, corner, x, top, width, height);
+        glReadPixels(x + width / 2, 600 - (top + height / 2) - 1, 1, 1,
+                     GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        dotBrightness[corner] = pixel[0];
+    }
+    assert(dotBrightness[0] > dotBrightness[1] && dotBrightness[1] > dotBrightness[2]);
+    // Geometry remains exactly 16:9 at each settings animation scale and scroll offset.
+    int anchorPanelHeight = panelHeight, anchorPanelWidth = panelWidth;
+    int anchorZooms[] = {75, 90, 100};
+    for (int percent : anchorZooms) {
+        panelHeight = anchorPanelHeight * percent / 100;
+        panelWidth = anchorPanelWidth * percent / 100;
+        scrollPosition = 0.5f;
+        anchorRect(2, 600, x, top, width, height);
+        assert(width * 9 == height * 16);
+    }
+    panelHeight = anchorPanelHeight; panelWidth = anchorPanelWidth; scrollPosition = 0;
+    averagingEnabled = false;
+    drawnControls = layoutControls(pages[3], 3, 0);
+    assert(drawnControls.rows[2] == -1 && drawnControls.rows[1] == -1);
+    testSliderValue = -1;
+    MenuAction hiddenAction;
+    handleMouseButton(anchorFrame.cursorX, anchorFrame.cursorY, leftMouseButton, mousePress, hiddenAction);
+    hiddenAction.run(); assert(testSliderValue == -1);
+    --pageCount; // Reuse the page slot; existing registration limits remain unchanged.
+    if (argc > 1 && std::strcmp(argv[1], "--anchors") == 0) {
+        eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        eglDestroyContext(display, context); eglDestroySurface(display, surface); eglTerminate(display);
+        std::puts("PASS: stepped slider values/endpoints, four-corner anchor clicks/hover/selected pixels, 16:9 scaled/scrolled geometry, conditional hiding; preceding menu regressions");
+        return 0;
+    }
     // Binding capture consumes the chosen key and release, rejects L, and cancels on Escape.
     MenuPage bindingPage = newPage("Binding");
     bindingPage.keyBind("Zoom key", setTestSlider, getTestSlider);
+    bindingPage.text("Related hint").groupWithPrevious();
+    assert(pages[3].items[1].groupWithPrevious && !layoutControls(pages[3], 3, 0).dividers[1]);
     __atomic_store_n(&open, true, __ATOMIC_RELAXED);
     __atomic_store_n(&openingCaptureReady, true, __ATOMIC_RELAXED);
     activePage = 3; controlView = 0; bindingItem = 0;
@@ -595,7 +838,12 @@ int main(int argc, char** argv) {
     for (int scale = 1; scale <= 4; scale *= 2) {
         updateLayout(320 * scale, 240 * scale);
         assert(panelWidth * referenceHeight == panelHeight * referenceWidth);
-        assert(panelWidth <= 320 * scale / 2 && panelHeight <= 240 * scale / 2);
+        // Fitting uses shared tiers with a 0.5x minimum, even on tiny windows.
+        int maxWidth = 320 * scale / 2, maxHeight = 240 * scale / 2;
+        if (maxWidth < referenceWidth / 2) maxWidth = referenceWidth / 2;
+        if (maxHeight < referenceHeight / 2) maxHeight = referenceHeight / 2;
+        assert(panelWidth <= maxWidth && panelHeight <= maxHeight);
+        assert(panelWidth <= 320 * scale && panelHeight <= 240 * scale);
         panelY = centeredPanelY;
         int footerTop = lastScreenHeight - panelY - panelHeight
             + panelHeight * menu_style::footerTopPercent / 100;
@@ -605,7 +853,7 @@ int main(int argc, char** argv) {
         }
         for (int i = 0; i < tilesPerView; ++i) {
             tileRect(i, lastScreenHeight, x, top, width, height);
-            assert(width * 4 == height * 3);
+            assert(width * 2 == height * 3); // Current tiles are 3:2 landscape cards.
             assert(top + height < footerTop && x >= panelX && x + width <= panelX + panelWidth);
         }
     }
@@ -653,5 +901,5 @@ int main(int argc, char** argv) {
     eglDestroyContext(display, context);
     eglDestroySurface(display, surface);
     eglTerminate(display);
-    std::puts("PASS: key binding capture/cancel/reserved keys; antialiased panel/border pixels, animation/input timing, tile/settings scrolling, settings zoom/fade transition, callback reentry, expandable conditional bubbles, hidden focus/drag cleanup, slider extremes, safe builder limits, and layout bounds");
+    std::puts("PASS: key binding capture/cancel/reserved keys; antialiased panel/border pixels, animation/input timing, tile/settings scrolling, settings zoom/fade transition, callback reentry, conditional groups and faint 1px dividers, hidden focus/drag cleanup, slider extremes, safe builder limits, and layout bounds");
 }

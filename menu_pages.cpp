@@ -2,12 +2,17 @@
 #include "client_modules.h"
 #include "client_settings.h"
 #include "auto_gg.h"
+#include "chat.h"
 #include "analog_input.h"
 #include "zoom.h"
 #include "render.h"
+#include "gpu_multidraw.h"
+#include "gpu_uniform_cache.h"
+#include "environment.h"
 #include "tablist.h"
 #include "particles.h"
 #include "experimental.h"
+#include "ui_scale.h"
 
 namespace {
 void zoomMultiplier(int tenths, char* value) {
@@ -19,6 +24,11 @@ void zoomMultiplier(int tenths, char* value) {
         value[n++] = static_cast<char>('0' + tenths % 10);
     }
     value[n++] = 'x'; value[n] = 0;
+}
+void fontScaleLabel(int index, char* value) {
+    const char* text = ui_scale::labels[index];
+    while (*text) *value++ = *text++;
+    *value = 0;
 }
 bool trailMode() { return !client_blur_average(); }
 }
@@ -68,6 +78,17 @@ void declare_menu_pages() {
         .icon("assets/icon-motionblur.png")
         .onToggle(client_set_blur, client_blur_enabled);
 
+    MenuPage fpsDisplayPage = newPage("FPS Display");
+    fpsDisplayPage.toggle("Enable FPS Display", client_set_fps_display, client_fps_display_enabled)
+        .toggle("Show 1% low", client_set_fps_low, client_fps_low).whenEnabled()
+        .slider("Average / update (ms)", 250, 2000, client_set_fps_interval,
+                client_fps_interval, nullptr, 250).whenEnabled()
+        .slider("Font scale", 0, ui_scale::count - 1, client_set_fps_font_scale,
+                client_fps_font_scale, fontScaleLabel).whenEnabled()
+        .anchor("Anchor", client_set_fps_anchor, client_fps_anchor).whenEnabled()
+        .text("1% low: average of the slowest 1% of frames.");
+    newTile("FPS Display").opens(fpsDisplayPage).onToggle(client_set_fps_display, client_fps_display_enabled);
+
     MenuPage fpsPage = newPage("FPS Limiter");
     fpsPage.toggle("Enable FPS Limiter", client_set_fps_limit, client_fps_limit_enabled)
         .slider("FPS Limit", 30, 480, client_set_fps_value, client_fps_value).whenEnabled();
@@ -77,17 +98,42 @@ void declare_menu_pages() {
         .onToggle(client_set_fps_limit, client_fps_limit_enabled);
 
     MenuPage renderPage = newPage("Render");
-    renderPage.toggle("Enable Render", client_set_render, client_render_enabled)
-        .toggle("Cull below camera", client_set_render_below, client_render_below)
-        .slider("Blocks below", 16, 256, client_set_render_below_distance,
-                client_render_below_distance).whenEnabled()
-        .toggle("Cull above camera", client_set_render_above, client_render_above)
-        .slider("Blocks above", 16, 256, client_set_render_above_distance,
-                client_render_above_distance).whenEnabled()
-        .text("Experimental vertical terrain limits.")
+    renderPage.toggle("Render distance", client_set_render, client_render_enabled)
+        .toggle("Horizontal", client_set_render_horizontal, client_render_horizontal).whenEnabled()
+        .slider("Horizontal", 16, 256, client_set_render_radius,
+                client_render_radius).whenEnabled(client_render_horizontal).groupWithPrevious()
+        .toggle("Below", client_set_render_below, client_render_below).whenEnabled()
+        .slider("Below", 16, 256, client_set_render_below_distance,
+                client_render_below_distance).whenEnabled(client_render_below).groupWithPrevious()
+        .toggle("Above", client_set_render_above, client_render_above).whenEnabled()
+        .slider("Above", 16, 256, client_set_render_above_distance,
+                client_render_above_distance).whenEnabled(client_render_above).groupWithPrevious()
+        .text("Experimental terrain distance limits.")
         .text("Can hide visible cliffs or cave openings.");
     if (render_error()) renderPage.text(render_error());
+    renderPage.toggle("GPU multi-draw (trial)", client_set_gpu_multidraw, client_gpu_multidraw_enabled)
+        .text("Batch supported draws; defaults OFF each launch.")
+        .text("Trial may have no effect on this renderer.");
+    renderPage.toggle("Uniform reuse v2 (trial)", client_set_uniform_cache, client_uniform_cache_enabled)
+        .text("Reuse identical shader values; OFF each launch.")
+        .text("Disable if lighting or textures look wrong.");
     newTile("Render").opens(renderPage).onToggle(client_set_render, client_render_enabled);
+
+    MenuPage environmentPage = newPage("Environment");
+    environmentPage.toggle("Enable Environment", client_set_environment, client_environment_enabled)
+        .toggle("Time changer", client_set_environment_time, client_environment_time).whenEnabled()
+        .slider("Time (ticks)", 0, 23999, client_set_environment_ticks,
+                client_environment_ticks).whenEnabled(client_environment_time).groupWithPrevious()
+        .toggle("Fog color", client_set_environment_fog, client_environment_fog).whenEnabled()
+        .slider("Hue (degrees)", 0, 360, client_set_environment_hue,
+                client_environment_hue).whenEnabled(client_environment_fog).groupWithPrevious()
+        .slider("Saturation (%)", 0, 100, client_set_environment_saturation,
+                client_environment_saturation).whenEnabled(client_environment_fog)
+        .slider("Value (%)", 0, 100, client_set_environment_value,
+                client_environment_value).whenEnabled(client_environment_fog);
+    if (environment_error()) environmentPage.text(environment_error());
+    newTile("Environment").opens(environmentPage)
+        .onToggle(client_set_environment, client_environment_enabled);
 
     MenuPage sprintPage = newPage("Auto Sprint");
     sprintPage.toggle("Enable Auto Sprint", client_set_sprint, client_sprint_enabled);
@@ -127,6 +173,13 @@ void declare_menu_pages() {
         .text("steve/hub runs a command; steve#/hub sends chat.")
         .text("steve?/hub asks; steve?#/hub asks to send chat.");
     newTile("Lobby Scanner").opens(lobbyPage).onToggle(client_set_lobby_watch, client_lobby_watch_enabled);
+
+    MenuPage ccUtilsPage = newPage("CC Utils");
+    ccUtilsPage.toggle("Enable CC Utils", client_set_cc_utils, client_cc_utils_enabled)
+        .toggle("Custom party invites dialog", client_set_party_invites, client_party_invites_enabled).whenEnabled()
+        .text("Ask before accepting party invites from chat.").whenEnabled();
+    if (chat_error()) ccUtilsPage.text(chat_error());
+    newTile("CC Utils").opens(ccUtilsPage).onToggle(client_set_cc_utils, client_cc_utils_enabled);
 
     char trigger[256], response[256];
     auto_gg_get_text(trigger, response);

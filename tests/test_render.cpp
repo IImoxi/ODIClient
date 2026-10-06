@@ -33,6 +33,30 @@ struct Fixture {
 };
 struct Results { const ChunkPosition* positions; unsigned long size; ChunkPosition* replacement = nullptr; };
 static int calls, sideEffects;
+static long long mockTime = 1000000000LL;
+static int clockReads, logWrites;
+static char logLine[1536];
+static bool failWrite;
+static int prepareMockCalls;
+static void mockPrepare(void* builder, const void* position, const void* direction, float value, bool flag) {
+    assert(builder == reinterpret_cast<void*>(1) && position == reinterpret_cast<void*>(2)
+        && direction == reinterpret_cast<void*>(3) && value == 0.375f && flag);
+    ++prepareMockCalls;
+}
+static int mockClock(clockid_t, timespec* value) {
+    ++clockReads;
+    value->tv_sec = mockTime / 1000000000LL;
+    value->tv_nsec = mockTime % 1000000000LL;
+    mockTime += 1000000;
+    return 0;
+}
+static ssize_t mockWrite(int fd, const void* data, size_t size) {
+    assert(fd == 123 && size < sizeof(logLine));
+    std::memcpy(logLine, data, size);
+    logLine[size] = 0;
+    ++logWrites;
+    return failWrite ? -1 : static_cast<ssize_t>(size);
+}
 static void nativeList(void* closure, const void* input) {
     ++calls;
     ++sideEffects; // Stand-in for dirty-section bookkeeping, which must always run.
@@ -116,6 +140,48 @@ int main() {
            && persisted.belowDistance == 16 && persisted.aboveDistance == 256);
 
 
+    // Horizontal filtering retains intersecting/tangent sections and preserves prefixes.
+    ready = true;
+    client_set_render_above(false); client_set_render_horizontal(true); client_set_render_radius(16);
+    const ChunkPosition radial[] = {{0,4,0},{1,4,0},{2,4,0},{2,4,1},{-2,4,0},{-3,4,0},{1,4,1},{2,4,2}};
+    Results radialResults{radial,8};
+    Fixture radius;
+    *radius.list()->end++ = {999,4,999};
+    radialResults.replacement = radius.moved;
+    renderList(radius.closure, &radialResults);
+    assert(radius.list()->end - radius.list()->begin == 4);
+    assert(radius.moved[0].x == 999 && radius.moved[3].x == -2 && radius.moved[3].z == 0);
+    Fixture diagonal;
+    diagonal.camera[0] = diagonal.camera[2] = 1;
+    radialResults.replacement = nullptr;
+    renderList(diagonal.closure, &radialResults);
+    assert(diagonal.list()->end - diagonal.list()->begin == 2);
+    // Camera movement changes the cutoff immediately; vertical limits compose.
+    Fixture movedCamera;
+    movedCamera.camera[0] = 32;
+    renderList(movedCamera.closure, &radialResults);
+    assert(movedCamera.list()->end - movedCamera.list()->begin == 5);
+    client_set_render_above(true); client_set_render_above_distance(16);
+    Fixture combined;
+    combined.camera[1] = 48;
+    renderList(combined.closure, &radialResults);
+    assert(combined.list()->end == combined.list()->begin);
+    client_set_render_above(false); client_set_render_above_distance(256);
+    Fixture badX;
+    badX.camera[0] = std::numeric_limits<float>::infinity();
+    renderList(badX.closure, &radialResults);
+    assert(badX.list()->end - badX.list()->begin == 8);
+    client_set_render_radius(256);
+    assert(client_render_radius() == 256 && client_render_below_distance() == 16
+           && client_render_above_distance() == 256 && persisted.horizontal && persisted.radius == 256);
+    client_set_render_radius(-10);
+    assert(client_render_radius() == 16);
+    client_set_render_horizontal(false);
+    Fixture cutoffDisabled;
+    renderList(cutoffDisabled.closure, &radialResults);
+    assert(cutoffDisabled.list()->end - cutoffDisabled.list()->begin == 8);
+    ready = false;
+
     // Execute the actual vtable patch and reject every native ABI gate independently.
     assert(hooks::initialize());
     unsigned long size = minecraft_build::current::buildNote + 4096;
@@ -133,6 +199,26 @@ int main() {
     std::memcpy(image+profile::listCaptureSite,profile::listCaptureSignature,sizeof(profile::listCaptureSignature));
     std::memcpy(image+profile::listOutputSelect,profile::listOutputSignature,sizeof(profile::listOutputSignature));
     std::memcpy(image+profile::listConsumptionSite,profile::listConsumptionSignature,sizeof(profile::listConsumptionSignature));
+    std::memcpy(image+profile::prepareFunction,profile::prepareFunctionSignature,sizeof(profile::prepareFunctionSignature));
+    std::memcpy(image+profile::prepareArguments,profile::prepareArgumentsSignature,sizeof(profile::prepareArgumentsSignature));
+    std::memcpy(image+profile::prepareCall,profile::prepareCallSignature,sizeof(profile::prepareCallSignature));
+    // Execute the real call-site patch through a fixture caller with a valid native
+    // stack layout. Keep the gated following mov intact and restore callee-saved registers.
+    const unsigned char prepareCaller[] = {0x55,0x41,0x56,0x48,0x81,0xec,0x08,0x03,0,0,
+        0x48,0x89,0xe5,0x48,0x81,0xc5,0xe8,0x02,0,0,0xe9};
+    auto caller = image+profile::prepareCall-64;
+    std::memcpy(caller,prepareCaller,sizeof(prepareCaller));
+    int jump = 64-sizeof(prepareCaller)-4;
+    std::memcpy(caller+sizeof(prepareCaller),&jump,4);
+    const unsigned char prepareCallerReturn[] = {0x48,0x81,0xc4,0x08,0x03,0,0,0x41,0x5e,0x5d,0xc3};
+    std::memcpy(image+profile::prepareCall+sizeof(profile::prepareCallSignature),prepareCallerReturn,sizeof(prepareCallerReturn));
+    const unsigned char prepareUnwind[] = {0x48,0x81,0xc4,0x38,0x02,0,0,0x5b,0x41,0x5c,0x41,0x5d,
+        0x41,0x5e,0x41,0x5f,0x5d,0x48,0xb8};
+    auto prepareTail = image+profile::prepareFunction+sizeof(profile::prepareFunctionSignature);
+    std::memcpy(prepareTail,prepareUnwind,sizeof(prepareUnwind));
+    auto prepareDestination = reinterpret_cast<unsigned long>(mockPrepare);
+    std::memcpy(prepareTail+sizeof(prepareUnwind),&prepareDestination,8);
+    prepareTail[sizeof(prepareUnwind)+8]=0xff; prepareTail[sizeof(prepareUnwind)+9]=0xe0;
     // Unwind the verified native prologue and tail-call the mock through its real ABI.
     const unsigned char unwind[] = {0x48,0x81,0xc4,0xe8,0,0,0,0x5b,0x41,0x5c,0x41,0x5d,0x41,0x5e,0x41,0x5f,0x5d,0x48,0xb8};
     auto tail = image+profile::listCallback+sizeof(profile::listEntry);
@@ -151,6 +237,15 @@ int main() {
         profile::listCaptureSite,profile::listOutputSelect,profile::listConsumptionSite,
         profile::listVtable+profile::listInvokeSlot};
     for (auto gate:gates) { corrupt(gate); assert(!install(base)); corrupt(gate); }
+    const unsigned long preparationGates[] = {profile::prepareFunction, profile::prepareArguments, profile::prepareCall};
+    for (auto gate : preparationGates) {
+        corrupt(gate); assert(!installPreparationTrace(base)); corrupt(gate);
+    }
+    assert(installPreparationTrace(base));
+    assert(std::memcmp(image+profile::prepareCall+5,profile::prepareCallSignature+5,7)==0);
+    auto prepareCallback = reinterpret_cast<PrepareLists>(caller);
+    prepareCallback(reinterpret_cast<void*>(1),reinterpret_cast<void*>(2),reinterpret_cast<void*>(3),0.375f,true);
+    assert(prepareMockCalls==1);
     auto slotPage = image+((profile::listVtable+profile::listInvokeSlot)&~(hooks::page_size()-1));
     assert(mprotect(slotPage,hooks::page_size(),PROT_READ)==0);
     assert(install(base));
@@ -167,5 +262,42 @@ int main() {
     Fixture restored;
     callback(restored.closure,&results);
     assert(restored.list()->end - restored.list()->begin == 6);
-    std::puts("PASS: Render vertical section bounds, negative heights, disabled forwarding, native side effects, multi-camera lists, reallocation, saved controls, and executable build/vtable/ABI gates");
+    // Tracing preserves native behavior even with the Render module disabled.
+    traceClock = mockClock;
+    traceWrite = mockWrite;
+    traceFormat = std::snprintf;
+    traceFd = 123;
+    traceStart = mockTime;
+    tracing = true;
+    prepareCallback(reinterpret_cast<void*>(1),reinterpret_cast<void*>(2),reinterpret_cast<void*>(3),0.375f,true);
+    assert(prepareMockCalls==2 && preparationTiming.calls==1 && preparationTiming.ns==3000000
+        && preparationTiming.maximum==3000000 && preparationCpuNs==1000000);
+    Fixture traced;
+    int previousCalls = calls;
+    callback(traced.closure, &results);
+    assert(calls == previousCalls + 1 && traced.list()->end - traced.list()->begin == 6);
+    assert(traceCalls == 1 && traceNs == 1000000 && traceMaxNs == 1000000);
+    render_trace_frame(16000000);
+    assert(logWrites == 0);
+    mockTime = traceStart + 1000000000LL;
+    render_trace_frame(20000000);
+    assert(logWrites == 1 && std::strstr(logLine, ",1,1.000000,1.000000,2,18.000000,20.000000,"));
+    assert(traceCalls == 0 && traceNs == 0 && traceMaxNs == 0 && traceFrames == 0);
+    assert(traceSectionsProduced==0 && traceSectionsKept==0 && preparationTiming.calls==0);
+    assert(std::strstr(logLine, ",6,6,1,3.000000,3.000000,1.000000,"));
+    int columns = 1;
+    for (const char* p=logLine; *p; ++p) if (*p==',') ++columns;
+    assert(columns==77);
+    tracing = false;
+    int previousReads = clockReads;
+    Fixture untraced;
+    callback(untraced.closure, &results);
+    render_trace_frame(16000000);
+    assert(clockReads == previousReads && logWrites == 1);
+    tracing = true;
+    failWrite = true;
+    mockTime = traceStart + 1000000000LL;
+    render_trace_frame(16000000);
+    assert(!tracing && logWrites==2);
+    std::puts("PASS: Render vertical/horizontal section bounds, negative heights, disabled forwarding, native side effects, multi-camera lists, reallocation, saved controls, and executable build/vtable/ABI gates");
 }

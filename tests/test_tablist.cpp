@@ -12,6 +12,7 @@ void test_presence_load(const char*, long long);
 void auto_gg_lobby_player(void*,const char*) {}
 void auto_gg_lobby_dispatch(void*) {}
 void auto_gg_lobby_reset() {}
+void auto_gg_world_reset() {}
 bool client_settings_get_tablist_mojangles() { return false; }
 void custom_font_set_mojangles(bool) {}
 float custom_menu_main_button_radius(int,int) { return 2; }

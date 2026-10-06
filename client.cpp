@@ -7,9 +7,15 @@
 #include "auto_gg.h"
 #include "client_settings.h"
 #include "fps_limiter.h"
+#include "fps_display.h"
+#include "display_layout.h"
 #include "render.h"
+#include "render_frame_trace.h"
+#include "gpu_multidraw.h"
+#include "gpu_uniform_cache.h"
 #include "tablist.h"
 #include "particles.h"
+#include "environment.h"
 #include "experimental.h"
 #include "popup.h"
 #include "custom_menu.h"
@@ -88,17 +94,24 @@ bool onScroll(void*, double, double, double, double dy) {
     return true;
 }
 void onFrame(void*, void*, void*) {
+    auto frameTrace=render_frame_trace_begin();
     bool gameActive = game_window_is_mouse_locked(game_window_get_primary_window());
     bool gameplay = !custom_menu_captures_input() && gameActive;
     // Inventory screens can release mouse capture while Minecraft is still
     // rendering. Keep the cap active there and while the client menu is open.
+    auto limiterTrace=render_frame_trace_stamp();
     fps_limiter_wait(__atomic_load_n(&fpsLimitEnabled, __ATOMIC_RELAXED), true,
                      __atomic_load_n(&fpsLimit, __ATOMIC_RELAXED));
+    render_frame_trace_record(FrameLimiter,limiterTrace);
     bool adaptiveAverage = __atomic_load_n(&blurFpsAverage, __ATOMIC_RELAXED);
     int averageHz = adaptiveAverage ? __atomic_load_n(&blurAverageHz, __ATOMIC_RELAXED) : 0;
     bool blurOn = __atomic_load_n(&blurEnabled, __ATOMIC_RELAXED) && gameActive;
     long long frameDeltaNs = fps_limiter_frame_delta_ns();
+    gpu_uniform_cache_frame();
+    gpu_multidraw_frame();
+    render_trace_frame(frameDeltaNs);
     if (adaptiveAverage && frameDeltaNs > 1000000000LL / averageHz) blurOn = false;
+    auto overlayTrace=render_frame_trace_stamp();
     motion_blur_render(blurOn,
                        __atomic_load_n(&blurStrength, __ATOMIC_RELAXED) / 100.0f,
                        1.0f,
@@ -107,8 +120,11 @@ void onFrame(void*, void*, void*) {
                        fps_limiter_frame_timestamp_ns());
     particles_update(zoomGameplay());
     tablist_render(zoomGameplay(), fps_limiter_frame_timestamp_ns());
+    display_layout_begin_frame();
+    fps_display_render(isSprintReady() && autosprint_has_focus(), fps_limiter_frame_timestamp_ns());
     custom_menu_render();
     popup_render(isSprintReady() && autosprint_has_focus(), fps_limiter_frame_timestamp_ns());
+    render_frame_trace_record(FrameOverlays,overlayTrace);
     // Native cursor changes belong on the frame thread.
     updateCursor(custom_menu_captures_input());
     bool captured = cursorDisabled(game_window_get_primary_window());
@@ -132,6 +148,7 @@ void onFrame(void*, void*, void*) {
     if (__atomic_exchange_n(&analogCapture, capture, __ATOMIC_RELAXED) != capture && capture)
         autosprint_release_movement_keys();
     auto_gg_update(game_window_is_mouse_locked(game_window_get_primary_window()), isSprintReady() && autosprint_has_focus());
+    render_frame_trace_end(frameTrace);
 }
 
 bool onKeyboard(void*, int key, int action) {
@@ -284,9 +301,12 @@ extern "C" __attribute__((visibility("default"))) void mod_preinit() {
 extern "C" __attribute__((visibility("default"))) void mod_init() {
     auto_gg_init();
     zoom_init();
+    gpu_uniform_cache_init();
+    gpu_multidraw_init();
     render_init();
     tablist_init();
     particles_init();
+    environment_init();
     __atomic_store_n(&centerCursorEnabled, client_settings_get_center_cursor(), __ATOMIC_RELAXED);
     bool zoom; int key, defaultLevel, scrollStep;
     client_settings_get_zoom(&zoom, &key, &defaultLevel, &scrollStep);
@@ -346,3 +366,40 @@ void client_set_lobby_watch_rules(const char* value) {
     settings.rules[i] = 0;
     client_settings_set_lobby_watch(settings);
 }
+void client_set_cc_utils(bool value) {
+    auto settings = client_settings_get_cc_utils(); settings.enabled = value;
+    client_settings_set_cc_utils(settings);
+}
+bool client_cc_utils_enabled() { return client_settings_get_cc_utils().enabled; }
+void client_set_party_invites(bool value) {
+    auto settings = client_settings_get_cc_utils(); settings.partyInvites = value;
+    client_settings_set_cc_utils(settings);
+}
+bool client_party_invites_enabled() { return client_settings_get_cc_utils().partyInvites; }
+
+void client_set_fps_display(bool value) {
+    auto settings = client_settings_get_fps_display(); settings.enabled = value;
+    client_settings_set_fps_display(settings);
+}
+bool client_fps_display_enabled() { return client_settings_get_fps_display().enabled; }
+void client_set_fps_low(bool value) {
+    auto settings = client_settings_get_fps_display(); settings.low = value;
+    client_settings_set_fps_display(settings);
+}
+bool client_fps_low() { return client_settings_get_fps_display().low; }
+void client_set_fps_interval(int value) {
+    auto settings = client_settings_get_fps_display(); settings.intervalMs = value;
+    client_settings_set_fps_display(settings);
+}
+int client_fps_interval() { return client_settings_get_fps_display().intervalMs; }
+
+void client_set_fps_font_scale(int value) {
+    auto settings = client_settings_get_fps_display(); settings.fontScale = value;
+    client_settings_set_fps_display(settings);
+}
+int client_fps_font_scale() { return client_settings_get_fps_display().fontScale; }
+void client_set_fps_anchor(int value) {
+    auto settings = client_settings_get_fps_display(); settings.anchor = value;
+    client_settings_set_fps_display(settings);
+}
+int client_fps_anchor() { return client_settings_get_fps_display().anchor; }

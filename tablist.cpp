@@ -267,7 +267,7 @@ void observe(int kind, void* handler, void* sharedPacket) {
         if (reset) clear();
         handlerIdentity = identity;
     }
-    if (reset) auto_gg_lobby_reset();
+    if (reset) auto_gg_world_reset();
     if (kind >= 2 || !readable(sharedPacket, 0, 8)) return;
     auto_gg_lobby_dispatch(handler);
     const void* packet = read<const void*>(sharedPacket, 0);

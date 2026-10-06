@@ -27,7 +27,7 @@ constexpr auto buildNote = minecraft_build::current::buildNote;
 
 extern "C" void* mcpelauncher_host_dlopen(const char* path, int flags) { return dlopen(path, flags); }
 extern "C" void* mcpelauncher_host_dlsym(void* lib, const char* name) { return dlsym(lib, name); }
-alignas(8) static unsigned char handlerObject[96], clientObject[0x190], playerObject[3000];
+alignas(8) static unsigned char handlerObject[96], clientObject[0x640], playerObject[3000];
 static void* senderMethods[4], *playerMethods[0x6c0 / 8], *levelMethods[0x740 / 8], *gameMethods[0xc0 / 8];
 static void** levelObject = levelMethods;
 static void** gameObject = gameMethods;
@@ -63,10 +63,19 @@ static void* createPacket(void* out, const void* author, const void* message,
     std::memcpy(bytes + 0xa8, message, 24);
     return out;
 }
-static void constructCommand(void* value) {
-    std::memset(value, 0, chat::commandPacketSize);
-    *static_cast<void***>(value) = packetMethods;
-    *reinterpret_cast<unsigned int*>(static_cast<unsigned char*>(value) + 0x20) = 0x4d;
+static unsigned char minecraftObject[0xc0], commandEngine[0x58];
+static unsigned long actorId = 1;
+static CommandUuid commandUuid(int) { return {1, 2}; }
+static const unsigned long* uniquePlayerId(void*) { return &actorId; }
+static void destroyCommandString(void*) {}
+static int submitNativeCommand(void*, const void* context, bool) {
+    auto words = static_cast<const unsigned long*>(context);
+    commands.emplace_back(reinterpret_cast<const char*>(words[2]), words[1]);
+    return 0;
+}
+static void dispatchActions(void* handler) {
+    auto_gg_lobby_dispatch(handler);
+    chat_notify_live({clientObject});
 }
 static void constructString(void* out, const char* text, unsigned long size) {
     auto words = static_cast<unsigned long*>(out);
@@ -134,9 +143,14 @@ int main() {
     gameMethods[0xb8 / 8] = reinterpret_cast<void*>(isRemote);
     *reinterpret_cast<void**>(clientObject + 0x188) = &gameObject;
     createChat = createPacket; destroyString = destroyXuid;
-    constructCommandPacket = constructCommand; constructNativeString = constructString;
+    constructNativeString = constructString;
+    *reinterpret_cast<void**>(clientObject + chat::clientMinecraft) = minecraftObject;
+    *reinterpret_cast<void**>(minecraftObject + chat::minecraftCommands) = commandEngine;
+    *reinterpret_cast<void**>(playerObject + chat::playerLevel) = &levelObject;
+    executeCommand = submitNativeCommand; playerUniqueId = uniquePlayerId; newCommandUuid = commandUuid;
+    destroyString = destroyCommandString; // Command fixtures use borrowed string storage.
 
-    // Confirmation parses both modes and only sends from a later live dispatch.
+    // Confirmation parses both modes and sends from a live gameplay callback.
     LobbyWatchSettings lobby; lobby.enabled = true;
     auto setRules = [&](const char* rules) {
         copy(lobby.rules, rules, sizeof(lobby.rules)); client_settings_set_lobby_watch(lobby);
@@ -146,37 +160,37 @@ int main() {
     auto_gg_lobby_player(handlerObject, "SuperSTEVE");
     assert(popupBusy && commands.empty() && popupMessage == "/hub");
     assert(popupTitle.find("SuperSTEVE") != std::string::npos);
-    answerPopup(PopupAnswer::No); auto_gg_lobby_dispatch(handlerObject); assert(commands.empty());
+    answerPopup(PopupAnswer::No); dispatchActions(handlerObject); assert(commands.empty());
     auto_gg_lobby_player(handlerObject, "steve"); answerPopup(PopupAnswer::Yes);
-    assert(commands.empty()); auto_gg_lobby_dispatch(handlerObject);
-    assert(commands == std::vector<std::string>{"hub"});
-    auto_gg_lobby_dispatch(handlerObject); assert(commands.size() == 1);
+    assert(commands.empty()); dispatchActions(handlerObject);
+    assert(commands == std::vector<std::string>{"/hub"});
+    dispatchActions(handlerObject); assert(commands.size() == 1);
     setRules("steve?#/hub");
     auto_gg_lobby_player(handlerObject, "Steve");
     assert(popupBusy && sent.empty() && popupMessage == "/hub" && popupTitle.find("chat") != std::string::npos);
-    answerPopup(PopupAnswer::Yes); auto_gg_lobby_dispatch(handlerObject);
+    answerPopup(PopupAnswer::Yes); dispatchActions(handlerObject);
     assert(sent == std::vector<std::string>{"/hub"} && commands.empty());
     setRules("steve?/hub"); auto_gg_lobby_player(handlerObject, "steve");
-    auto_gg_lobby_reset(); assert(!popupBusy); auto_gg_lobby_dispatch(handlerObject); assert(commands.empty());
+    auto_gg_lobby_reset(); assert(!popupBusy); dispatchActions(handlerObject); assert(commands.empty());
     auto_gg_lobby_player(handlerObject, "steve");
     lobby.enabled = false; client_settings_set_lobby_watch(lobby);
-    assert(!popupBusy); auto_gg_lobby_dispatch(handlerObject); assert(commands.empty());
+    assert(!popupBusy); dispatchActions(handlerObject); assert(commands.empty());
     lobby.enabled = true; setRules("steve?/hub"); popupBusy = true;
     auto_gg_lobby_player(handlerObject, "steve");
     assert(lobbyConfirmation.state == LobbyConfirmation::Idle && commands.empty()); popupBusy = false;
     setRules("steve?/hub"); auto_gg_lobby_player(handlerObject, "steve");
-    setRules("steve?/home"); assert(!popupBusy); auto_gg_lobby_dispatch(handlerObject); assert(commands.empty());
+    setRules("steve?/home"); assert(!popupBusy); dispatchActions(handlerObject); assert(commands.empty());
     auto_gg_lobby_player(handlerObject, "steve"); answerPopup(PopupAnswer::Yes);
     alignas(8) unsigned char otherHandler[96]; std::memcpy(otherHandler, handlerObject, sizeof(otherHandler));
-    auto_gg_lobby_dispatch(otherHandler); auto_gg_lobby_dispatch(handlerObject); assert(commands.empty());
+    dispatchActions(otherHandler); dispatchActions(handlerObject); assert(commands.empty());
     setRules("steve/hub"); auto_gg_lobby_player(handlerObject, "Steve");
-    assert(commands == std::vector<std::string>{"hub"} && !popupBusy);
+    assert(commands == std::vector<std::string>{"/hub"} && !popupBusy);
     setRules("steve#/hub"); auto_gg_lobby_player(handlerObject, "Steve");
     assert(sent == std::vector<std::string>{"/hub"} && !popupBusy);
     setRules("steve?/hub"); auto_gg_lobby_player(handlerObject, "alex"); assert(!popupBusy);
     auto_gg_lobby_player(handlerObject, "steve"); answerPopup(PopupAnswer::Yes);
-    auto_gg_update(true, false); auto_gg_lobby_dispatch(handlerObject); assert(commands.empty());
-    auto_gg_update(true, true); auto_gg_lobby_dispatch(handlerObject); assert(commands.size() == 1);
+    auto_gg_update(true, false); dispatchActions(handlerObject); assert(commands.empty());
+    auto_gg_update(true, true); dispatchActions(handlerObject); assert(commands.size() == 1);
     lobbyOriginals[0] = lobbyOriginals[1] = lobbyOriginals[2] = original;
     int nativeForwarded = forwarded;
     lobbyDispatch<0>(nullptr, nullptr, handlerObject, nullptr);
@@ -184,6 +198,38 @@ int main() {
     lobbyDispatch<2>(nullptr, nullptr, handlerObject, nullptr);
     assert(forwarded == nativeForwarded + 3);
     client_settings_set_lobby_watch({}); sent.clear(); commands.clear(); echoed.clear();
+    // Party detection searches the full decoded message, independently of AutoGG.
+    enabled = false;
+    client_settings_set_cc_utils({true, true});
+    int inviteForwarded = forwarded;
+    receive("\xc2\xa7" "aYou have recieved a party invite from \xc2\xa7" "eplayer471\xc2\xa7" "a.");
+    assert(popupBusy && forwarded == inviteForwarded && popupMessage.find("player471") != std::string::npos);
+    answerPopup(PopupAnswer::No); dispatchActions(handlerObject); assert(commands.empty());
+    receive("[Party] party invite from Alex Smith. More text");
+    assert(popupMessage.find("Alex Smith") != std::string::npos);
+    answerPopup(PopupAnswer::Yes); assert(commands.empty());
+    auto_gg_update(true, false); dispatchActions(handlerObject); assert(commands.empty());
+    auto_gg_update(true, true); dispatchActions(handlerObject);
+    assert(commands == std::vector<std::string>{"/p accept Alex_Smith"});
+    dispatchActions(handlerObject); assert(commands.size() == 1); commands.clear();
+    receive("You have recieved a party invite from Steve.");
+    receive("You have recieved a party invite from Steve."); // Same pending invite stays hidden.
+    assert(popupBusy && forwarded == inviteForwarded);
+    client_settings_set_cc_utils({true, false}); assert(!popupBusy);
+    receive("You have recieved a party invite from Steve."); assert(forwarded == ++inviteForwarded);
+    client_settings_set_cc_utils({true, true}); popupBusy = true;
+    receive("You have recieved a party invite from Steve."); // Busy prompt must preserve native chat.
+    assert(forwarded == ++inviteForwarded && partyInvite.state == PartyInvite::Idle); popupBusy = false;
+    receive("You have recieved a party invite from Steve."); answerPopup(PopupAnswer::Yes);
+    auto_gg_world_reset(); dispatchActions(handlerObject); assert(commands.empty());
+    receive("You have recieved a party invite from Steve.");
+    dispatchActions(otherHandler); assert(!popupBusy);
+    receive("You have recieved a party invite from Bad/name.");
+    receive("You have recieved a party invite from .");
+    receive("Nothing here");
+    assert(forwarded == inviteForwarded + 3 && !popupBusy);
+    receive("You have recieved a party invite from Steve.", 3); assert(!popupBusy); // Unsupported variant.
+    client_settings_set_cc_utils({});
     destroyed = stringsDestroyed = 0;
 
     ChatModsSettings blacklist;
@@ -206,6 +252,7 @@ int main() {
     client_settings_set_chat_mods(blacklist);
     receive("ordinary message"); assert(forwarded == before + 5);
     client_settings_set_chat_mods({}); forwarded = 0;
+    destroyString = destroyXuid;
 
     char decoded[4097];
     alignas(8) unsigned char bytes[208];
@@ -278,11 +325,24 @@ int main() {
     client_settings_set_blur(true, 144, true);
     client_settings_set_zoom(true, 90, 300, 25);
     client_settings_set_particles(true);
+    client_settings_set_cc_utils({true, true});
+    client_settings_set_environment({true, true, true, 18000, 240, 75, 80});
+    client_settings_set_fps_display({true, true, 1750, 5, 3});
     lobby.enabled = true; copy(lobby.rules, "steve?/hub,alex?#/hello", sizeof(lobby.rules));
     client_settings_set_lobby_watch(lobby);
-    client_settings_set_render({true, true, false, 80, 160});
+    client_settings_set_render({true, true, false, 80, 160, true, 96});
     auto_gg_update(true, true);
-    reset(); enabled = false; savedRender = {}; savedParticles = false; loadConfig();
+    reset(); enabled = false; savedRender = {}; savedParticles = false; savedFpsDisplay = {}; savedEnvironment = {}; savedCCUtils = {}; loadConfig();
+    assert(savedCCUtils.enabled && savedCCUtils.partyInvites);
+    assert(client_settings_get_fps_display().enabled && client_settings_get_fps_display().low
+           && client_settings_get_fps_display().intervalMs == 1750
+           && client_settings_get_fps_display().fontScale == 5 && client_settings_get_fps_display().anchor == 3);
+    auto environment = client_settings_get_environment();
+    assert(environment.enabled && environment.time && environment.fog && environment.ticks == 18000
+           && environment.hue == 240 && environment.saturation == 75 && environment.value == 80);
+    client_settings_set_environment({true, true, true, -1, 999, -1, 999});
+    assert(savedEnvironment.ticks == 0 && savedEnvironment.hue == 360
+           && savedEnvironment.saturation == 0 && savedEnvironment.value == 100);
     assert(client_settings_get_particles());
     assert(client_settings_get_lobby_watch().enabled && std::strcmp(client_settings_get_lobby_watch().rules, "steve?/hub,alex?#/hello") == 0);
     assert(enabled && std::strcmp(trigger, "Victory!") == 0 && std::strcmp(response, "good game \xc3\xa9") == 0);
@@ -295,7 +355,75 @@ int main() {
     assert(blurAverage && averageHz == 144 && screenBlur);
     auto render = client_settings_get_render();
     assert(render.enabled && render.below && !render.above && render.belowDistance == 80
-           && render.aboveDistance == 160);
+           && render.aboveDistance == 160 && render.horizontal && render.radius == 96);
+    // Version 19 preserves enable/low and rounds its interval to the new stepped range.
+    FILE* version19File = std::fopen(configPath, "r"); assert(version19File);
+    char version19Lines[35][512]{};
+    for (auto& line : version19Lines) assert(std::fgets(line, sizeof(line), version19File));
+    std::fclose(version19File);
+    for (const char* interval : {"100", "1100", "5000"}) {
+        version19File = std::fopen(configPath, "w"); assert(version19File);
+        std::fputs("AUTOGG19\n", version19File);
+        for (int i = 1; i < 34; ++i) std::fputs(version19Lines[i], version19File);
+        std::fprintf(version19File, "%s\n", interval); std::fclose(version19File);
+        savedFpsDisplay = {}; dirty = false; loadConfig();
+        assert(!savedEnvironment.enabled && !savedEnvironment.time && !savedEnvironment.fog
+               && savedEnvironment.ticks == 6000 && savedEnvironment.value == 100);
+        assert(!savedCCUtils.enabled && !savedCCUtils.partyInvites);
+        int expected = !std::strcmp(interval, "100") ? 250 : !std::strcmp(interval, "1100") ? 1000 : 2000;
+        assert(savedFpsDisplay.enabled && savedFpsDisplay.low && savedFpsDisplay.intervalMs == expected
+               && savedFpsDisplay.fontScale == 2 && savedFpsDisplay.anchor == 0 && dirty);
+    }
+    client_settings_set_fps_display({true, true, 1750, 5, 3}); saveConfig();
+    // Version 18 migrates existing settings and defaults the FPS overlay off.
+    FILE* oldFps = std::fopen(configPath, "r"); assert(oldFps);
+    char fpsLines[32][512]{};
+    for (auto& line : fpsLines) assert(std::fgets(line, sizeof(line), oldFps));
+    std::fclose(oldFps);
+    oldFps = std::fopen(configPath, "w"); assert(oldFps);
+    std::fputs("AUTOGG18\n", oldFps);
+    for (int i = 1; i < 32; ++i) std::fputs(fpsLines[i], oldFps);
+    std::fclose(oldFps); dirty = false; loadConfig();
+    assert(!savedFpsDisplay.enabled && !savedFpsDisplay.low && savedFpsDisplay.intervalMs == 1000 && dirty);
+    assert(client_settings_get_render().horizontal && client_settings_get_render().radius == 96);
+    client_settings_set_fps_display({true, true, 0}); assert(savedFpsDisplay.intervalMs == 250);
+    client_settings_set_fps_display({true, true, 9999}); assert(savedFpsDisplay.intervalMs == 2000);
+    saveConfig(); savedFpsDisplay = {}; loadConfig();
+    assert(savedFpsDisplay.enabled && savedFpsDisplay.low && savedFpsDisplay.intervalMs == 2000);
+    // Invalid interval rejects the entire configuration.
+    oldFps = std::fopen(configPath, "w"); assert(oldFps);
+    std::fputs("AUTOGG19\n", oldFps);
+    for (int i = 1; i < 32; ++i) std::fputs(fpsLines[i], oldFps);
+    std::fputs("1\n1\n5001\n", oldFps); std::fclose(oldFps);
+    savedFpsDisplay = {}; loadConfig(); assert(!savedFpsDisplay.enabled);
+    // New format rejects non-stepped intervals, invalid scales/anchors, and missing fields.
+    for (const char* extra : {"1\n1\n300\n2\n0\n", "1\n1\n1000\n11\n0\n",
+                              "1\n1\n1000\n2\n4\n", "1\n1\n1000\n2\n"}) {
+        oldFps = std::fopen(configPath, "w"); assert(oldFps);
+        std::fputs("AUTOGG20\n", oldFps);
+        for (int i = 1; i < 32; ++i) std::fputs(fpsLines[i], oldFps);
+        std::fputs(extra, oldFps); std::fclose(oldFps);
+        savedFpsDisplay = {}; loadConfig(); assert(!savedFpsDisplay.enabled);
+    }
+    client_settings_set_fps_display({true, true, 1100, -1, 5});
+    assert(savedFpsDisplay.intervalMs == 1000 && savedFpsDisplay.fontScale == 0 && savedFpsDisplay.anchor == 0);
+    client_settings_set_fps_display({true, true, 1125, 99, 3});
+    assert(savedFpsDisplay.intervalMs == 1250 && savedFpsDisplay.fontScale == ui_scale::count - 1 && savedFpsDisplay.anchor == 3);
+    dirty = true; saveConfig();
+    // Previous format keeps existing settings and defaults the new cutoff OFF.
+    FILE* oldRender = std::fopen(configPath, "r"); assert(oldRender);
+    char oldLines[30][512]{};
+    for (auto& line : oldLines) assert(std::fgets(line, sizeof(line), oldRender));
+    std::fclose(oldRender);
+    oldRender = std::fopen(configPath, "w"); assert(oldRender);
+    std::fputs("AUTOGG17\n", oldRender);
+    for (int i = 1; i < 30; ++i) std::fputs(oldLines[i], oldRender);
+    std::fclose(oldRender); loadConfig();
+    render = client_settings_get_render();
+    assert(render.enabled && render.belowDistance == 80 && !render.horizontal && render.radius == 128 && dirty);
+    assert(client_settings_get_lobby_watch().enabled);
+    assert(!client_settings_get_fps_display().enabled && !client_settings_get_fps_display().low
+           && client_settings_get_fps_display().intervalMs == 1000);
     client_settings_set_center_cursor(true);
     auto_gg_toggle(); auto_gg_update(true, true);
     enabled = true; savedCenterCursor = false; loadConfig(); assert(!enabled && client_settings_get_center_cursor());
@@ -312,7 +440,7 @@ int main() {
     auto_gg_update(true, true);
     FILE* migrated = std::fopen(configPath, "r"); assert(migrated);
     char version[16]{};
-    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG17\n") == 0);
+    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG22\n") == 0);
     std::fclose(migrated);
     FILE* previous = std::fopen(configPath, "w"); assert(previous);
     std::fputs("AUTOGG5\n0\nVictory!\ngg\n0\n0\n30\n0\n120\n0\n60\n0\n1\n90\n", previous);
@@ -351,7 +479,7 @@ int main() {
     auto_gg_update(true, true);
     migrated = std::fopen(configPath, "r"); assert(migrated);
     std::memset(version, 0, sizeof(version));
-    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG17\n") == 0);
+    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG22\n") == 0);
     std::fclose(migrated);
     client_settings_set_tablist(false); saveConfig();
     savedTablist = true; loadConfig(); assert(!client_settings_get_tablist());
@@ -406,6 +534,21 @@ int main() {
     assert(!installHook(base)); // Sender getters must also match the verified build.
     auto table = reinterpret_cast<unsigned long*>(image + clientVtable);
     table[0x100 / 8] = base + 0xa7efaa0;
+    table[chat::clientMinecraftSlot / 8] = base + chat::clientMinecraftGetter;
+    const unsigned long functions[] = {chat::clientMinecraftGetter, chat::nativeCommandExecute, chat::playerUniqueIdGetter,
+                                       chat::commandUuidGenerator, chat::commandOriginData, chat::clientPlayerGetter};
+    const unsigned char* signatures[] = {chat::clientMinecraftGetterSignature, chat::nativeCommandExecuteSignature,
+                                         chat::playerUniqueIdGetterSignature, chat::commandUuidGeneratorSignature,
+                                         chat::commandOriginDataSignature, chat::clientPlayerGetterSignature};
+    const unsigned long sizes[] = {sizeof(chat::clientMinecraftGetterSignature), sizeof(chat::nativeCommandExecuteSignature),
+                                    sizeof(chat::playerUniqueIdGetterSignature), sizeof(chat::commandUuidGeneratorSignature),
+                                    sizeof(chat::commandOriginDataSignature), sizeof(chat::clientPlayerGetterSignature)};
+    for (int i = 0; i < 6; ++i) {
+        std::memcpy(image + functions[i], signatures[i], sizes[i]);
+        mprotect(image + (functions[i] & ~(hooks::page_size() - 1)), hooks::page_size(), PROT_READ | PROT_EXEC);
+    }
+    *reinterpret_cast<unsigned long*>(image + chat::playerCommandOriginVtable + 0xd0) = base + chat::commandOriginType;
+    *reinterpret_cast<unsigned long*>(image + chat::playerCommandOriginVtable + 0xd8) = base + chat::commandOriginData;
     table[0x488 / 8] = base + 0xa7fe9c0;
     table[0x5a0 / 8] = base + 0xa800590;
     table[0x930 / 8] = base + 0xa80bc40;
@@ -439,5 +582,5 @@ int main() {
     assert(installHook(base) && *slot == dispatch);
     assert(!installHook(base)); // Do not chain/install twice.
     assert(munmap(image, size) == 0);
-    std::puts("PASS: AutoGG message decoding, matching, cooldown, cancellation, UTF-8, persisted settings, base/legacy native chat sender ABI, local echo, Lobby Scanner confirmation/cancellation/deferred sends, and build-ID hook gate");
+    std::puts("PASS: shared chat listeners/filtering, party keyword matching, popup answers/deferred commands/world reset, AutoGG cooldown/settings/sender ABI/local echo, Lobby Scanner confirmation, and native build gate");
 }

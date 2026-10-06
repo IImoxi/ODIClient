@@ -33,13 +33,14 @@ unsigned long fontUse;
 int activeFontPixels = fontPixels;
 float rasterScale = 1.0f;
 GLuint atlasTexture, headTexture, program, vao, buffer;
-GLuint skinTexture, previewTexture, previewFramebuffer, previewDepth, skinVao, ringTexture;
+GLuint skinTexture, previewTexture, previewFramebuffer, previewDepth, skinVao;
 unsigned long previewRevision;
 float drawOpacity = 1.0f;
 bool drawClip;
 IconTexture iconTextures[iconCapacity];
 GLint screenUniform, colorUniform;
 GLint samplerUniform, rgbaUniform;
+GLint ringUniform;
 void* fontLibrary;
 void* zlibLibrary;
 FT_Library ftLibrary;
@@ -310,10 +311,16 @@ bool initFont() {
         "1.0-p.y*2.0/screen.y,p.z,1.0);uv=t;}");
     GLuint fragmentShader = makeShader(GL_FRAGMENT_SHADER, version,
         "in vec2 uv;out vec4 color;uniform sampler2D atlas;uniform vec4 ink;"
-        "uniform int rgbaImage;void main(){vec4 p=texture(atlas,uv);"
-        "if(rgbaImage!=0 && p.a<0.0039)discard;"
+        "uniform vec4 ring;uniform int rgbaImage;void main(){"
+        "if(rgbaImage==3){vec2 p=uv*2.0-1.0;float d=length(p)*ring.x;"
+        "float aa=max(fwidth(d),0.75);float angle=mod(atan(p.x,-p.y)+6.2831853,6.2831853);"
+        "float arcAa=aa/max(d,1.0);float outer=1.0-smoothstep(ring.y-aa,ring.y+aa,d);"
+        "float inner=smoothstep(ring.y-ring.z-aa,ring.y-ring.z+aa,d);"
+        "float arc=ring.w>=0.99999?1.0:smoothstep(-arcAa,arcAa,ring.w*6.2831853-angle);"
+        "color=vec4(ink.rgb,ink.a*outer*inner*arc);"
+        "}else{vec4 p=texture(atlas,uv);if(rgbaImage!=0 && p.a<0.0039)discard;"
         "color=rgbaImage==0 ? vec4(ink.rgb,ink.a*p.r) : p*ink;"
-        "if(rgbaImage==2)color.rgb*=ink.a;}");
+        "if(rgbaImage==2)color.rgb*=ink.a;}}");
     if (!vertexShader || !fragmentShader) return false;
     program = createProgram();
     attachShader(program, vertexShader); attachShader(program, fragmentShader);
@@ -325,6 +332,7 @@ bool initFont() {
     colorUniform = getUniformLocation(program, "ink");
     samplerUniform = getUniformLocation(program, "atlas");
     rgbaUniform = getUniformLocation(program, "rgbaImage");
+    ringUniform = getUniformLocation(program, "ring");
     GLint oldActive, oldTexture;
     getIntegerv(GL_ACTIVE_TEXTURE, &oldActive);
     activeTexture(GL_TEXTURE0);
@@ -607,14 +615,18 @@ bool custom_font_draw_left(const char* text, int leftX, int top, int height,
     return drawText(text, leftX, top, height, screenWidth, screenHeight, false);
 }
 
-bool custom_font_draw_left_scaled(const char* text, float leftX, float top, int height,
-                                  float scale, int screenWidth, int screenHeight) {
+bool custom_font_draw_scaled(const char* text, float x, float top, int height,
+                             float scale, int screenWidth, int screenHeight, bool centered) {
     float savedScale = rasterScale;
     rasterScale = 1.0f;
-    bool drawn = drawText(text, leftX, top, height * scale, screenWidth, screenHeight, false,
+    bool drawn = drawText(text, x, top, height * scale, screenWidth, screenHeight, centered,
                           menu_style::text.red, menu_style::text.green, menu_style::text.blue, height);
     rasterScale = savedScale;
     return drawn;
+}
+bool custom_font_draw_left_scaled(const char* text, float leftX, float top, int height,
+                                  float scale, int screenWidth, int screenHeight) {
+    return custom_font_draw_scaled(text, leftX, top, height, scale, screenWidth, screenHeight, false);
 }
 
 bool custom_font_draw_left_color(const char* text, int leftX, int top, int height,
@@ -838,34 +850,20 @@ bool custom_font_draw_ring(int centerX, int centerY, float radius, float progres
                            int screenWidth, int screenHeight) {
     if (radius <= 1 || progress <= 0 || !initFont()) return false;
     if (progress > 1) progress = 1;
-    DrawState saved; UnpackState unpack;
-    activeTexture(GL_TEXTURE0); bindSampler(0,0);
-    if (!ringTexture) {
-        const unsigned char white = 255;
-        genTextures(1,&ringTexture); bindTexture(GL_TEXTURE_2D,ringTexture);
-        texParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
-        texParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
-        texImage2D(GL_TEXTURE_2D,0,GL_R8,1,1,0,GL_RED,GL_UNSIGNED_BYTE,&white);
-    } else bindTexture(GL_TEXTURE_2D,ringTexture);
-    int count = 0;
-    float x = 0, y = -1;
-    for (int i = 0; i < 48 && i < progress*48; ++i) {
-        float nx = x*0.9914449f-y*0.1305262f, ny = x*0.1305262f+y*0.9914449f;
-        float fraction = progress*48-i;
-        if (fraction < 1) { nx = x+(nx-x)*fraction; ny = y+(ny-y)*fraction; }
-        float inner = radius-1.5f;
-        Vertex a{centerX+x*radius,centerY+y*radius,0,0}, b{centerX+nx*radius,centerY+ny*radius,0,0};
-        Vertex c{centerX+nx*inner,centerY+ny*inner,0,0}, d{centerX+x*inner,centerY+y*inner,0,0};
-        const Vertex quad[] = {a,b,c,a,c,d};
-        for (auto vertex : quad) vertices[count++] = vertex;
-        x = nx; y = ny;
-    }
+    DrawState saved;
+    float extent = radius + 1.0f;
+    const Vertex quad[] = {
+        {centerX-extent,centerY-extent,0,0}, {centerX+extent,centerY-extent,1,0},
+        {centerX+extent,centerY+extent,1,1}, {centerX-extent,centerY-extent,0,0},
+        {centerX+extent,centerY+extent,1,1}, {centerX-extent,centerY+extent,0,1}
+    };
+    activeTexture(GL_TEXTURE0); bindTexture(GL_TEXTURE_2D,atlasTexture); bindSampler(0,0);
     useProgram(program); viewport(0,0,screenWidth,screenHeight);
     uniform2f(screenUniform,screenWidth,screenHeight); uniform4f(colorUniform,1,1,1,drawOpacity);
-    uniform1i(samplerUniform,0); uniform1i(rgbaUniform,0);
+    uniform4f(ringUniform,extent,radius,1.5f,progress); uniform1i(samplerUniform,0); uniform1i(rgbaUniform,3);
     blendEquationSeparate(GL_FUNC_ADD,GL_FUNC_ADD);
     blendFuncSeparate(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA,GL_ONE,GL_ONE_MINUS_SRC_ALPHA);
     bindVertexArray(vao); bindBuffer(GL_ARRAY_BUFFER,buffer);
-    bufferData(GL_ARRAY_BUFFER,count*sizeof(Vertex),vertices,GL_STREAM_DRAW); drawArrays(GL_TRIANGLES,0,count);
+    bufferData(GL_ARRAY_BUFFER,sizeof(quad),quad,GL_STREAM_DRAW); drawArrays(GL_TRIANGLES,0,6);
     return true;
 }

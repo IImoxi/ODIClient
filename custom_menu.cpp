@@ -1,4 +1,5 @@
 #include "ui_animation.h"
+#include "ui_scale.h"
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 #include "launcher_api.h"
@@ -38,9 +39,10 @@ struct Tile {
     void (*onToggle)(bool);
     bool (*getEnabled)();
 };
-enum PageItemType { pageText, pageButton, pageToggle, pageSlider, pageTextBox, pageChoice, pageKeyBind, pageDropdown };
+enum PageItemType { pageText, pageButton, pageToggle, pageSlider, pageTextBox, pageChoice, pageKeyBind, pageDropdown, pageAnchor };
 struct PageItem {
     PageItemType type;
+    bool groupWithPrevious;
     int parentToggle;
     const char* label;
     const char* choices[2];
@@ -52,6 +54,7 @@ struct PageItem {
     void (*formatSlider)(int, char*); // Writes at most 15 characters plus terminator.
     int sliderMin;
     int sliderMax;
+    int sliderStep;
     void (*onToggle)(bool);
     void (*onSlider)(int);
     bool multiline;
@@ -75,8 +78,11 @@ struct ControlLayout {
     int offsetsPercent[pageItemCapacity]{};
     int parents[pageItemCapacity]{};
     bool enabled[pageItemCapacity]{};
+    bool descriptions[pageItemCapacity]{};
+    bool dividers[pageItemCapacity]{};
     bool multiline[pageItemCapacity]{};
     bool expanded[pageItemCapacity]{};
+    bool anchors[pageItemCapacity]{};
     int lineSlots[pageItemCapacity]{};
 };
 int bindingItem = -1;
@@ -93,6 +99,8 @@ ControlLayout layoutControls(const Page& page, int pageIndex, int requestedView)
     for (unsigned int i = 0; i < page.itemCount; ++i) {
         layout.rows[i] = -1;
         layout.parents[i] = page.items[i].parentToggle;
+        layout.descriptions[i] = page.items[i].type == pageText;
+        layout.anchors[i] = page.items[i].type == pageAnchor;
         if (page.items[i].type == pageToggle || page.items[i].type == pageChoice || page.items[i].type == pageDropdown)
             layout.enabled[i] = page.items[i].getToggle && page.items[i].getToggle();
     }
@@ -112,11 +120,23 @@ ControlLayout layoutControls(const Page& page, int pageIndex, int requestedView)
         layout.indices[row] = index;
         layout.rows[index] = row;
         layout.offsetsPercent[index] = totalPercent;
+        if (row > 0) {
+            int previous = visible[row - 1];
+            bool descriptions = layout.descriptions[index] && layout.descriptions[previous]
+                && layout.parents[index] == layout.parents[previous];
+            bool sliders = item.type == pageSlider && page.items[previous].type == pageSlider
+                && layout.parents[index] == layout.parents[previous];
+            bool grouped = item.groupWithPrevious && previous == index - 1;
+            layout.dividers[index] = !descriptions && !sliders && !grouped;
+        }
         layout.multiline[index] = item.multiline;
         layout.lineSlots[index] = lines;
         layout.expanded[index] = item.type == pageDropdown && item.expanded;
         if (layout.expanded[index]) totalPercent += 2 * menu_style::rowHeightPercent;
-        totalPercent += menu_style::rowStridePercent + (lines - 1) * menu_style::textLineHeightPercent;
+        totalPercent += (layout.descriptions[index] ? menu_style::descriptionRowStridePercent
+                                                  : menu_style::rowStridePercent)
+            + (lines - 1) * menu_style::textLineHeightPercent
+            + (layout.anchors[index] ? menu_style::rowHeightPercent : 0);
     }
     layout.slots = (totalPercent + menu_style::rowStridePercent - 1) / menu_style::rowStridePercent;
     int maximum = layout.slots > controlsPerView ? layout.slots - controlsPerView : 0;
@@ -312,8 +332,11 @@ void pageItemRect(unsigned int index, int screenHeight,
     top -= static_cast<int>(scrollPosition * panelHeight * menu_style::rowStridePercent / 100);
     width = panelWidth * (100 - 2 * menu_style::panelPaddingPercent) / 100;
     int fieldRows = drawnControls.multiline[index] ? drawnControls.lineSlots[index] : 1;
-    height = panelHeight * (menu_style::rowHeightPercent
+    int rowHeight = drawnControls.descriptions[index] ? menu_style::descriptionRowHeightPercent
+                                                    : menu_style::rowHeightPercent;
+    height = panelHeight * (rowHeight
         + (fieldRows - 1) * menu_style::textLineHeightPercent) / 100;
+    if (drawnControls.anchors[index]) height += panelHeight * menu_style::rowHeightPercent / 100;
     if (drawnControls.expanded[index]) height += panelHeight * 2 * menu_style::rowHeightPercent / 100;
     if (drawnControls.pageIndex >= 0 && drawnControls.parents[index] >= 0 && drawnControls.rows[index] >= 0) {
         int inset = panelWidth * 3 / 100;
@@ -324,6 +347,29 @@ void pageItemRect(unsigned int index, int screenHeight,
 
 bool contains(double x, double y, int left, int top, int width, int height) {
     return x >= left && x < left + width && y >= top && y < top + height;
+}
+
+// Use the same geometry for drawing and clicks, including scrolling and settings zoom.
+void anchorRect(unsigned int index, int screenHeight, int& x, int& top, int& width, int& height) {
+    int rowX, rowTop, rowWidth, rowHeight;
+    pageItemRect(index, screenHeight, rowX, rowTop, rowWidth, rowHeight);
+    int unit = (rowHeight - panelHeight * 2 / 100) / 9;
+    int widthUnit = rowWidth * 60 / 100 / 16;
+    if (widthUnit < unit) unit = widthUnit;
+    if (unit < 1) unit = 1;
+    width = unit * 16; height = unit * 9;
+    x = rowX + rowWidth - width - panelWidth * 2 / 100;
+    top = rowTop + (rowHeight - height) / 2;
+}
+void anchorDotRect(unsigned int index, int screenHeight, int corner,
+                   int& x, int& top, int& width, int& height) {
+    int boxX, boxTop, boxWidth, boxHeight;
+    anchorRect(index, screenHeight, boxX, boxTop, boxWidth, boxHeight);
+    int diameter = panelHeight * 3 / 100;
+    if (diameter < 4) diameter = 4;
+    width = height = diameter * 2; // Larger invisible click target around each dot.
+    x = boxX + (corner % 2 ? boxWidth : 0) - diameter;
+    top = boxTop + (corner / 2 ? boxHeight : 0) - diameter;
 }
 
 void textFieldRect(unsigned int index, int screenHeight,
@@ -518,6 +564,11 @@ void updateSlider(unsigned int index, double x, MenuAction& action) {
     // Wide intermediates also support ranges that span negative and positive values.
     long long range = static_cast<long long>(item.sliderMax) - item.sliderMin;
     action.value = static_cast<int>(item.sliderMin + static_cast<long long>(fraction * range + 0.5));
+    if (item.sliderStep > 1) {
+        long long offset = static_cast<long long>(action.value) - item.sliderMin;
+        action.value = static_cast<int>(item.sliderMin + (offset + item.sliderStep / 2) / item.sliderStep * item.sliderStep);
+        if (action.value > item.sliderMax) action.value = item.sliderMax;
+    }
     action.slider = item.onSlider;
 }
 
@@ -549,6 +600,16 @@ bool handleMouseButton(double x, double y, int button, int action, MenuAction& p
             int left, top, width, height;
             pageItemRect(i, lastScreenHeight, left, top, width, height);
             PageItem& item = page.items[i];
+            if (item.type == pageAnchor) {
+                for (int corner = 0; corner < 4; ++corner) {
+                    int dotX, dotTop, dotWidth, dotHeight;
+                    anchorDotRect(i, lastScreenHeight, corner, dotX, dotTop, dotWidth, dotHeight);
+                    if (contains(x, y, dotX, dotTop, dotWidth, dotHeight)) {
+                        pending.slider = item.onSlider; pending.value = corner;
+                        return true;
+                    }
+                }
+            }
             if (item.type == pageTextBox) textFieldRect(i, lastScreenHeight, left, top, width, height);
             if (!contains(x, y, left, top, width, height)) continue;
             if (item.type == pageTextBox) {
@@ -718,6 +779,12 @@ MenuPage& MenuPage::text(const char* value) {
     return *this;
 }
 
+MenuPage& MenuPage::groupWithPrevious() {
+    if (index < pageCount && pages[index].lastAppended > 0)
+        pages[index].items[pages[index].lastAppended].groupWithPrevious = true;
+    return *this;
+}
+
 MenuPage& MenuPage::button(const char* label, void (*onClick)()) {
     if (PageItem* control = appendPageItem(index, pageButton, label)) {
         PageItem& item = *control;
@@ -744,19 +811,27 @@ MenuPage& MenuPage::toggle(const char* label, void (*onChange)(bool), bool (*get
 
 MenuPage& MenuPage::slider(const char* label, int min, int max,
                              void (*onChange)(int), int (*getValue)(),
-                             void (*formatValue)(int, char*)) {
-    if (min >= max) {
+                             void (*formatValue)(int, char*), int step) {
+    if (min >= max || step < 1 || (static_cast<long long>(max) - min) % step != 0) {
         if (index < pageCount) pages[index].lastAppended = -1;
-        builderError = "Slider minimum must be below maximum";
+        builderError = "Slider range/step invalid";
         return *this;
     }
     if (PageItem* control = appendPageItem(index, pageSlider, label)) {
         PageItem& item = *control;
         item.sliderMin = min;
         item.sliderMax = max;
+        item.sliderStep = step;
         item.onSlider = onChange;
         item.getSlider = getValue;
         item.formatSlider = formatValue;
+    }
+    return *this;
+}
+
+MenuPage& MenuPage::anchor(const char* label, void (*onChange)(int), int (*getValue)()) {
+    if (PageItem* item = appendPageItem(index, pageAnchor, label)) {
+        item->onSlider = onChange; item->getSlider = getValue;
     }
     return *this;
 }
@@ -788,10 +863,6 @@ MenuPage& MenuPage::whenEnabled(bool (*isVisible)()) {
     Page& page = pages[index];
     if (page.lastAppended < 0) return *this;
     PageItem& child = page.items[page.itemCount - 1];
-    if (child.type == pageToggle) {
-        builderError = "Nested dependent toggles are not supported";
-        return *this;
-    }
     for (int parent = static_cast<int>(page.itemCount) - 2; parent >= 0; --parent) {
         if (page.items[parent].parentToggle >= 0) continue;
         if (page.items[parent].type == pageToggle) {
@@ -1035,9 +1106,9 @@ float menuScaleForScreen(int screenWidth, int screenHeight) {
     float fittingScale = static_cast<float>(maxWidth) / referenceWidth;
     float heightScale = static_cast<float>(maxHeight) / referenceHeight;
     if (heightScale < fittingScale) fittingScale = heightScale;
-    constexpr float scales[] = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f, 6.0f};
     float scale = 0.5f;
-    for (float candidate : scales) {
+    for (int percentage : ui_scale::percentages) {
+        float candidate = percentage / 100.0f;
         if (candidate > fittingScale) break;
         scale = candidate;
     }
@@ -1173,10 +1244,17 @@ void drawButton(const MenuFrame& frame, int id, int x, int top, int width, int h
     }
 }
 
+// Render-thread text context: all page controls use settled glyphs during transitions.
+int pageTextHeight, pageTextWidth;
+float pageTextScale = 1.0f;
+int pageFontHeight(int percent) {
+    int height = (pageTextHeight ? pageTextHeight : panelHeight) * percent / 100;
+    return height > 0 ? height : 1;
+}
 void drawLabel(const char* text, int x, int top, int width, int height,
-               int fontHeight, int screenWidth, int screenHeight, bool centered = true,
-               float textScale = 1.0f) {
+               int fontHeight, int screenWidth, int screenHeight, bool centered = true) {
     if (!text || width <= 0 || height <= 0) return;
+    float textScale = pageTextScale;
     char label[65]{};
     int length = 0;
     while (text[length] && length < 64) { label[length] = text[length]; ++length; }
@@ -1187,14 +1265,41 @@ void drawLabel(const char* text, int x, int top, int width, int height,
         label[length - 1] = label[length - 2] = label[length - 3] = '.';
         truncated = false;
     }
-    if (!centered && textScale != 1.0f) {
-        custom_font_draw_left_scaled(label, x, top + (height - fontHeight * textScale) * 0.5f,
-                                     fontHeight, textScale, screenWidth, screenHeight);
-        return;
-    }
-    int textTop = top + (height - fontHeight) / 2;
-    if (centered) custom_font_draw(label, x + width / 2, textTop, fontHeight, screenWidth, screenHeight);
-    else custom_font_draw_left(label, x, textTop, fontHeight, screenWidth, screenHeight);
+    float textTop = textScale == 1.0f ? top + (height - fontHeight) / 2
+        : top + (height - fontHeight * textScale) * 0.5f;
+    custom_font_draw_scaled(label, centered ? x + width / 2.0f : x, textTop,
+                            fontHeight, textScale, screenWidth, screenHeight, centered);
+}
+
+// Every boolean setting uses this label/track/thumb renderer through MenuPage::toggle.
+void drawToggle(const MenuFrame& frame, int i, int x, int top, int width, int height,
+                int screenWidth, int screenHeight) {
+    int inset = frame.page.items[i].parentToggle >= 0 ? 0 : width * 3 / 100;
+    drawLabel(frame.page.items[i].label, x + inset, top, width * 73 / 100,
+              height, pageFontHeight(3), screenWidth, screenHeight, false);
+    int trackHeight = panelHeight * 6 / 100, trackTop = top + (height - trackHeight) / 2;
+    int padding = trackHeight / 10;
+    if (padding < 1) padding = 1;
+    int size = trackHeight - padding * 2;
+    int trackWidth = size * 2 + padding * 2;
+    int trackX = x + width - inset - trackWidth;
+    float radius = trackHeight * menu_style::switchRadiusPercent / 100.0f;
+    drawButton(frame, 100 + i, trackX, trackTop, trackWidth, trackHeight,
+               screenHeight, radius, true, frame.controls.enabled[i]);
+    const ButtonMotion& motion = buttonMotions[frame.pageIndex + 1][i];
+    int thumbX = trackX + padding
+        + static_cast<int>((trackWidth - padding * 2 - size) * motion.enabled + 0.5f);
+    int thumbTop = trackTop + padding;
+    drawSurface(thumbX, thumbTop, size, size, screenHeight, menu_style::settingsButton,
+                size * menu_style::switchRadiusPercent / 100.0f, 0.0f, 1.0f, 0.0f,
+                menu_style::switchThumbOpacity + menu_style::switchThumbHoverOpacity * motion.hover);
+    custom_font_set_opacity(menuOpacity * (1.0f - motion.enabled));
+    custom_font_draw_icon("assets/icon-switch-cross.png", thumbX + size / 2, thumbTop, size,
+                          1.0f, 1.0f, 1.0f, screenWidth, screenHeight);
+    custom_font_set_opacity(menuOpacity * motion.enabled);
+    custom_font_draw_icon("assets/icon-switch-check.png", thumbX + size / 2, thumbTop, size,
+                          1.0f, 1.0f, 1.0f, screenWidth, screenHeight);
+    custom_font_set_opacity(menuOpacity);
 }
 
 // Render-thread state: the base title slides while the suffix fades in.
@@ -1279,9 +1384,8 @@ void drawTile(const MenuFrame& frame, int index, const Tile& tile, int x, int to
             custom_font_draw_icon(tile.iconPath, x + width / 2, top + height * 10 / 100, iconSize,
                                   1.0f, 1.0f, 1.0f,
                                   screenWidth, screenHeight);
-            drawSurface(x, top + height * 74 / 100,
-                        width, 1, screenHeight, menu_style::tileDivider,
-                        0.0f, 0.0f, menu_style::tileDividerTint);
+            draw_gl_divider(x, screenHeight - (top + height * 74 / 100) - 1, width,
+                            menuOpacity * menu_style::tileDividerOpacity, clippingContent);
         }
         drawLabel(tile.text, x + width * 6 / 100, labelTop, width * 88 / 100,
                   height * 22 / 100, labelHeight, screenWidth, screenHeight);
@@ -1316,11 +1420,20 @@ void drawSlider(const PageItem& item, unsigned int index, int screenWidth, int s
     pageItemRect(index, screenHeight, x, top, width, height);
     sliderTrackRect(index, screenHeight, trackX, trackTop, trackWidth, trackHeight);
     int value = sliderValue(item);
+    // Fit and wrap at the settled dimensions, then scale the resulting lines together.
+    int animatedHeight = panelHeight, animatedWidth = panelWidth;
+    if (pageTextHeight) { panelHeight = pageTextHeight; panelWidth = pageTextWidth; }
     int fontHeight = sliderFontHeight(item, index, screenHeight);
     char first[80], second[80];
-    sliderLabelLines(item, value, fontHeight, trackX - x - panelHeight / 100, first, second);
+    int settledX, settledTop, settledWidth, settledHeight, labelX, labelTop, labelWidth, labelHeight;
+    pageItemRect(index, screenHeight, settledX, settledTop, settledWidth, settledHeight);
+    sliderTrackRect(index, screenHeight, labelX, labelTop, labelWidth, labelHeight);
+    sliderLabelLines(item, value, fontHeight, labelX - settledX - panelHeight / 100, first, second);
+    panelHeight = animatedHeight; panelWidth = animatedWidth;
     int lineCount = second[0] ? 2 : 1;
-    int textTop = top + (height - fontHeight * lineCount) / 2;
+    float displayHeight = fontHeight * pageTextScale;
+    float textTop = pageTextScale == 1.0f ? top + (height - fontHeight * lineCount) / 2
+        : top + (height - displayHeight * lineCount) * 0.5f;
     float radius = trackHeight * menu_style::sliderTrackRadiusPercent / 100.0f;
     drawSurface(trackX, trackTop, trackWidth, trackHeight, screenHeight, menu_style::sliderTrack, radius,
                 0.0f, 1.0f, 0.0f, menu_style::sliderTrackOpacity);
@@ -1340,8 +1453,9 @@ void drawSlider(const PageItem& item, unsigned int index, int screenWidth, int s
                 screenHeight, menu_style::sliderHandle,
                 handleHeight * menu_style::sliderHandleRadiusPercent / 100.0f,
                 0.0f, 1.0f, 0.0f, menu_style::sliderHandleOpacity);
-    custom_font_draw_left(first, x, textTop, fontHeight, screenWidth, screenHeight);
-    if (second[0]) custom_font_draw_left(second, x, textTop + fontHeight, fontHeight, screenWidth, screenHeight);
+    custom_font_draw_left_scaled(first, x, textTop, fontHeight, pageTextScale, screenWidth, screenHeight);
+    if (second[0]) custom_font_draw_left_scaled(second, x, textTop + displayHeight,
+                                               fontHeight, pageTextScale, screenWidth, screenHeight);
 }
 
 // Render-thread state, relative to the textbox so scrolling moves it with the field.
@@ -1369,8 +1483,12 @@ void caretPosition(int page, int item, int fontHeight, int width, int& x, int& y
     x = static_cast<int>(currentX + 0.5f); y = static_cast<int>(currentY + 0.5f);
 }
 
-void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight, int settledHeight = 0) {
+void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight, int settledHeight = 0,
+                      int settledWidth = 0, float scale = 0.0f) {
     if (!settledHeight) settledHeight = panelHeight;
+    pageTextHeight = settledHeight;
+    pageTextWidth = settledWidth ? settledWidth : panelWidth * settledHeight / panelHeight;
+    pageTextScale = scale > 0.0f ? scale : static_cast<float>(panelHeight) / settledHeight;
     if (frame.focused < 0) caretMotion.item = -1;
     if (frame.controls.viewCount > 1) {
         int x = panelX + panelWidth * 94 / 100;
@@ -1388,17 +1506,23 @@ void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight,
         const PageItem& item = frame.page.items[i];
         int x, top, width, height;
         pageItemRect(i, screenHeight, x, top, width, height);
-        int fontHeight = panelHeight * 3 / 100;
+        if (frame.controls.dividers[i]) {
+            int previousX, previousTop, previousWidth, previousHeight;
+            pageItemRect(frame.controls.indices[row - 1], screenHeight,
+                         previousX, previousTop, previousWidth, previousHeight);
+            int dividerTop = (previousTop + previousHeight + top) / 2;
+            int dividerX = panelX + panelWidth * menu_style::panelPaddingPercent / 100;
+            int dividerWidth = panelWidth * (100 - 2 * menu_style::panelPaddingPercent) / 100;
+            draw_gl_divider(dividerX, screenHeight - dividerTop - 1, dividerWidth,
+                            menuOpacity * menu_style::settingsDividerOpacity, clippingContent);
+        }
+        int fontHeight = pageFontHeight(3);
         if (item.type == pageText) {
-            int settledFontHeight = settledHeight * 3 / 100;
+            int settledFontHeight = settledHeight * menu_style::descriptionFontHeightPercent / 100;
             if (settledFontHeight < 1) settledFontHeight = 1;
-            float scale = static_cast<float>(panelHeight) / settledHeight;
-            // Scale glyph geometry continuously rather than rounding the animated font height.
-            custom_font_set_raster_scale(1.0f);
             int padding = width * 3 / 100;
             drawLabel(item.label, x + padding, top, width - padding * 2, height,
-                      settledFontHeight, screenWidth, screenHeight, false, scale);
-            custom_font_set_raster_scale(scale);
+                      settledFontHeight, screenWidth, screenHeight, false);
         } else if (item.type == pageKeyBind) {
             char label[96];
             int key = item.getSlider ? item.getSlider() : 0;
@@ -1416,35 +1540,11 @@ void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight,
             drawLabel(frame.binding == i ? "Press a key (Esc cancels)" : label,
                       x, top, width, height, fontHeight, screenWidth, screenHeight);
         } else if (item.type == pageButton) {
-            if (item.parentToggle < 0)
-                drawButton(frame, 100 + i, x, top, width, height, screenHeight,
-                           panelHeight * menu_style::settingsButtonOutlineRadiusPercent / 100.0f, true);
+            drawButton(frame, 100 + i, x, top, width, height, screenHeight,
+                       panelHeight * menu_style::settingsButtonOutlineRadiusPercent / 100.0f, true);
             drawLabel(item.label, x, top, width, height, fontHeight, screenWidth, screenHeight);
         } else if (item.type == pageToggle) {
-            int bubbleHeight = height;
-            bool endsWithMultiline = false;
-            for (int childRow = row + 1; childRow < frame.controls.count; ++childRow) {
-                int child = frame.controls.indices[childRow];
-                if (frame.page.items[child].parentToggle != i) break;
-                int childX, childTop, childWidth, childHeight;
-                pageItemRect(child, screenHeight, childX, childTop, childWidth, childHeight);
-                bubbleHeight = childTop + childHeight - top;
-                endsWithMultiline = frame.page.items[child].multiline;
-            }
-            if (bubbleHeight > height) bubbleHeight += panelHeight / 100;
-            if (endsWithMultiline) bubbleHeight += panelHeight * menu_style::multilineBubbleBottomPaddingPercent / 100;
-            drawButton(frame, 100 + i, x, top, width, bubbleHeight, screenHeight,
-                       panelHeight * menu_style::settingsButtonOutlineRadiusPercent / 100.0f,
-                       true, frame.controls.enabled[i]);
-            drawLabel(item.label, x + width * 3 / 100, top, width * 73 / 100, height,
-                      fontHeight, screenWidth, screenHeight, false);
-            bool enabled = frame.controls.enabled[i];
-            int statusX = x + width * 82 / 100, statusWidth = width * 15 / 100;
-            int statusTop = top + height / 5, statusHeight = height * 3 / 5;
-            drawButton(frame, 100 + i, statusX, statusTop, statusWidth, statusHeight, screenHeight,
-                       panelHeight * menu_style::settingsStatusRadiusPercent / 100.0f, true, enabled);
-            drawLabel(enabled ? "ON" : "OFF", statusX, statusTop, statusWidth, statusHeight,
-                      fontHeight, screenWidth, screenHeight);
+            drawToggle(frame, i, x, top, width, height, screenWidth, screenHeight);
         } else if (item.type == pageDropdown) {
             int rowHeight = panelHeight * menu_style::rowHeightPercent / 100;
             int selectX = x + width * 32 / 100, selectWidth = width * 68 / 100;
@@ -1481,10 +1581,29 @@ void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight,
                 drawLabel(item.choices[option], optionX, top, optionWidth, height,
                           fontHeight, screenWidth, screenHeight);
             }
+        } else if (item.type == pageAnchor) {
+            drawLabel(item.label, x, top, width * 30 / 100, height,
+                      fontHeight, screenWidth, screenHeight, false);
+            int boxX, boxTop, boxWidth, boxHeight;
+            anchorRect(i, screenHeight, boxX, boxTop, boxWidth, boxHeight);
+            drawSurface(boxX, boxTop, boxWidth, boxHeight, screenHeight,
+                        menu_style::control, 0.0f, 1.0f, 1.0f, 0.0f, 0.7f);
+            int selected = item.getSlider ? item.getSlider() : 0;
+            for (int corner = 0; corner < 4; ++corner) {
+                int dotX, dotTop, dotWidth, dotHeight;
+                anchorDotRect(i, screenHeight, corner, dotX, dotTop, dotWidth, dotHeight);
+                bool hovered = frame.cursorValid && contains(frame.cursorX, frame.cursorY,
+                                                            dotX, dotTop, dotWidth, dotHeight);
+                int diameter = dotWidth / 2;
+                drawSurface(dotX + diameter / 2, dotTop + diameter / 2, diameter, diameter,
+                            screenHeight, {1, 1, 1}, diameter / 2.0f, 0.0f, 1.0f, 0.0f,
+                            selected == corner ? 1.0f : hovered ? 0.65f : 0.25f);
+            }
         } else if (item.type == pageSlider) {
             drawSlider(item, i, screenWidth, screenHeight);
         } else if (item.type == pageTextBox) {
-            custom_font_draw_left(item.label, x, top, panelHeight * 2 / 100, screenWidth, screenHeight);
+            custom_font_draw_left_scaled(item.label, x, top, pageFontHeight(2),
+                                         pageTextScale, screenWidth, screenHeight);
             textFieldRect(i, screenHeight, x, top, width, height);
             float radius = panelHeight * 1.5f / 100.0f;
             drawSurface(x, top, width, height, screenHeight, menu_style::control, radius, 0.0f, menu_style::textBoxTint);
@@ -1505,28 +1624,31 @@ void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight,
                 value[length] = 0;
                 bool last = !*text;
                 const char* shown = value;
-                if (frame.focused == i) while (*shown && custom_font_text_width(shown, fontHeight) > textWidth - 3) {
+                if (frame.focused == i) while (*shown && custom_font_text_width(shown, fontHeight) * pageTextScale > textWidth - 3) {
                     ++shown;
                     while ((static_cast<unsigned char>(*shown) & 0xc0) == 0x80) ++shown;
                 }
-                int textBlockHeight = fontHeight + (visibleLines - 1) * lineHeight;
+                int displayHeight = static_cast<int>(fontHeight * pageTextScale + 0.5f);
+                int textBlockHeight = displayHeight + (visibleLines - 1) * lineHeight;
                 int lineTop = top + (height - textBlockHeight) / 2 + line * lineHeight;
-                drawLabel(shown, textX, lineTop, textWidth, fontHeight,
+                drawLabel(shown, textX, lineTop, textWidth, displayHeight,
                           fontHeight, screenWidth, screenHeight, false);
                 if (last && frame.focused == i) {
-                    int caretX = custom_font_text_width(shown, fontHeight) + 1;
+                    int caretX = static_cast<int>(custom_font_text_width(shown, fontHeight) * pageTextScale + 1);
                     int caretY = lineTop - top;
-                    caretPosition(frame.pageIndex, i, fontHeight, textWidth, caretX, caretY);
+                    caretPosition(frame.pageIndex, i, displayHeight, textWidth, caretX, caretY);
                     int caretWidth = panelHeight / 400;
                     if (caretWidth < 1) caretWidth = 1;
                     if (frame.caretVisible) drawSurface(textX + caretX, top + caretY, caretWidth,
-                                fontHeight, screenHeight, menu_style::caret, 0.0f);
+                                displayHeight, screenHeight, menu_style::caret, 0.0f);
                 }
                 if (last) break;
                 ++text;
             }
         }
     }
+    pageTextHeight = pageTextWidth = 0;
+    pageTextScale = 1.0f;
 }
 }
 
@@ -1662,6 +1784,7 @@ void custom_menu_render() {
         drawSurface(panelX, panelTop, panelWidth, panelHeight, screenHeight,
                     menu_style::panelOutline, borderRadius, menu_style::panelOutlineThickness);
     drawHeader(headerTitle, screenWidth, screenHeight);
+    float textScale = 1.0f;
     if (frame.transition.active) {
         float scale = frame.transition.exitPage >= 0
             ? settingsExitScale(frame.transition.progress)
@@ -1671,7 +1794,7 @@ void custom_menu_render() {
         panelX = savedX + (savedWidth - panelWidth) / 2;
         panelY = savedY + (savedHeight - panelHeight) / 2;
         panelTop = screenHeight - panelY - panelHeight;
-        custom_font_set_raster_scale(static_cast<float>(panelHeight) / savedHeight);
+        textScale = scale;
         menuOpacity *= frame.transition.exitPage >= 0
             ? 1.0f - frame.transition.progress : frame.transition.progress;
         custom_font_set_opacity(menuOpacity);
@@ -1683,7 +1806,7 @@ void custom_menu_render() {
     clippingContent = true;
     custom_font_set_clip(true);
     if (frame.pageIndex < 0) drawTiles(frame, screenWidth, screenHeight);
-    else if (menuOpacity > 0.0f) drawPageControls(frame, screenWidth, screenHeight, savedHeight);
+    else if (menuOpacity > 0.0f) drawPageControls(frame, screenWidth, screenHeight, savedHeight, savedWidth, textScale);
     clippingContent = false;
     custom_font_set_clip(false);
     menuScissor(oldScissor[0], oldScissor[1], oldScissor[2], oldScissor[3]);

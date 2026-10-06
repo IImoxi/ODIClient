@@ -4,9 +4,11 @@
 #include "launcher_api.h"
 #include "auto_gg.h"
 #include "client_settings.h"
+#include "ui_scale.h"
 #include "minecraft_build.h"
 #include "hook_manager.h"
 #include "popup.h"
+#include "chat.h"
 
 namespace {
 namespace chat = minecraft_build::current::chat;
@@ -17,14 +19,23 @@ constexpr auto legacyHandlerVtable = chat::legacyHandlerVtable;
 constexpr auto handleTextFunction = chat::handleTextFunction;
 using Dispatch = void (*)(void*, const void*, void*, void*);
 Dispatch originalDispatch, lobbyOriginals[3];
+void* (*originalPlayerGetter)(void*);
+unsigned char liveDispatchBusy;
 struct LobbyConfirmation {
     enum State { Idle, Waiting, Approved } state = Idle;
-    unsigned long ticket = 0, handlerIdentity = 0;
+    unsigned long ticket = 0, handlerIdentity = 0, clientIdentity = 0;
     bool publicText = false;
     char text[256]{};
 };
 LobbyConfirmation lobbyConfirmation;
 unsigned long lobbyTicket;
+struct PartyInvite {
+    enum State { Idle, Waiting, Approved } state = Idle;
+    unsigned long ticket = 0, handlerIdentity = 0, clientIdentity = 0;
+    char player[65]{};
+};
+PartyInvite partyInvite;
+unsigned long partyTicket;
 decltype(&fopen) openFile;
 decltype(&fgets) getLine;
 decltype(&fclose) closeFile;
@@ -38,8 +49,11 @@ bool savedTablist = true;
 bool savedTablistMojangles;
 bool savedParticles = false;
 RenderSettings savedRender;
+EnvironmentSettings savedEnvironment;
+FpsDisplaySettings savedFpsDisplay;
 ChatModsSettings savedChatMods;
 LobbyWatchSettings savedLobbyWatch;
+CCUtilsSettings savedCCUtils;
 bool savedZoom;
 int savedZoomKey = 67, savedZoomDefault = 30, savedZoomScroll = 5;
 bool savedSprint, savedBlur;
@@ -52,10 +66,12 @@ const char* blockedReason = "AutoGG: waiting for gameplay";
 unsigned long gameBase;
 using CreateChat = void* (*)(void*, const void*, const void*, const void*, const void*, const void*);
 CreateChat createChat;
-using ConstructCommandPacket = void (*)(void*);
 using ConstructNativeString = void (*)(void*, const char*, unsigned long);
-ConstructCommandPacket constructCommandPacket;
 ConstructNativeString constructNativeString;
+struct CommandUuid { unsigned long low, high; };
+CommandUuid (*newCommandUuid)(int);
+int (*executeCommand)(void*, const void*, bool);
+const unsigned long* (*playerUniqueId)(void*);
 void (*destroyString)(void*);
 unsigned char stateLock;
 char trigger[256] = "You won the game", response[256] = "gg";
@@ -140,7 +156,7 @@ bool validText(const char* text, bool multiline = false) {
 }
 int parseRange(const char* text, int minimum, int maximum) {
     unsigned long n = length(text);
-    if (n < 1 || n > 3) return -1;
+    if (n < 1 || n > 5) return -1;
     int value = 0;
     for (unsigned long i = 0; i < n; ++i) {
         if (text[i] < '0' || text[i] > '9') return -1;
@@ -151,13 +167,19 @@ int parseRange(const char* text, int minimum, int maximum) {
 int parseFpsLimit(const char* text) { return parseRange(text, 30, 480); }
 unsigned long formatIntLine(int value, char* line) {
     unsigned long size = 0;
-    if (value >= 100) line[size++] = static_cast<char>('0' + value / 100);
+    if (value >= 10000) line[size++] = static_cast<char>('0' + value / 10000);
+    if (size || value >= 1000) line[size++] = static_cast<char>('0' + value / 1000 % 10);
+    if (size || value >= 100) line[size++] = static_cast<char>('0' + value / 100 % 10);
     if (size || value >= 10) line[size++] = static_cast<char>('0' + value / 10 % 10);
     line[size++] = static_cast<char>('0' + value % 10);
     line[size++] = '\n';
     return size;
 }
 void setStatus(const char* value) { __atomic_store_n(&status, value, __ATOMIC_RELEASE); }
+void cancelPartyInvite();
+void confirmedActions(const ChatLiveContext& context);
+void* observePlayer(void* client);
+bool handlePartyInvite(void* handler, const char* text);
 
 // Minecraft 1.26.52.3 Android x86_64: libc++ strings have a 24-byte layout.
 // TextPacketPayload is a variant at +0x88, with index at +0xc0. Disassembly of
@@ -189,15 +211,14 @@ bool packetMessage(const unsigned char* packet, char* result) {
 template<class F> F method(void* object, unsigned long offset) {
     return reinterpret_cast<F>((*static_cast<void***>(object))[offset / 8]);
 }
-bool sendChat(void* handler, const char* message) {
-    // Both verified handler vtables dispatch TextPacket on the same base.
-    // Both vtables inherit handle(TextPacket&) at +0x120 and client at +0x58.
-    if (!handler) { setStatus("AutoGG: incoming chat handler unavailable"); return false; }
-    unsigned long handlerTable = *static_cast<unsigned long*>(handler);
-    if (handlerTable != gameBase + handlerVtable && handlerTable != gameBase + legacyHandlerVtable) {
-        setStatus("AutoGG: unverified incoming chat handler"); return false;
-    }
+void* clientFromHandler(void* handler) {
+    if (!handler) return nullptr;
+    unsigned long table = *static_cast<unsigned long*>(handler);
+    if (table != gameBase + handlerVtable && table != gameBase + legacyHandlerVtable) return nullptr;
     void* client = *reinterpret_cast<void**>(static_cast<unsigned char*>(handler) + chat::handlerClient);
+    return client && *static_cast<unsigned long*>(client) == gameBase + clientVtable ? client : nullptr;
+}
+bool sendChatClient(void* client, const char* message) {
     if (!client || *static_cast<unsigned long*>(client) != gameBase + clientVtable) {
         setStatus("AutoGG: client instance bridge unavailable"); return false;
     }
@@ -237,50 +258,88 @@ bool sendChat(void* handler, const char* message) {
     method<void (*)(void*)>(packet, 0)(packet); // non-deleting TextPacket destructor.
     return true;
 }
-bool sendCommand(void* handler, const char* command) {
-    if (!handler) return false;
-    unsigned long handlerTable = *static_cast<unsigned long*>(handler);
-    if (handlerTable != gameBase + handlerVtable && handlerTable != gameBase + legacyHandlerVtable) return false;
-    void* client = *reinterpret_cast<void**>(static_cast<unsigned char*>(handler) + chat::handlerClient);
-    if (!client || *static_cast<unsigned long*>(client) != gameBase + clientVtable) return false;
+bool sendChat(void* handler, const char* message) {
+    return sendChatClient(clientFromHandler(handler), message);
+}
+bool sendCommandClient(void* client, const char* command) {
+    if (!client || !command) return false;
+    // CommandRequestPacket carries the slash, just like chat's command input.
+    // Normalize here so every module uses the same wire format.
+    if (*command == '/') ++command;
+    unsigned long size = 0;
+    while (command[size] && size < 255) ++size;
+    if (!size || size > 254) return false;
+    char text[256] = "/";
+    for (unsigned long i = 0; i < size; ++i) {
+        if (command[i] == '\n' || command[i] == '\r') return false;
+        text[i + 1] = command[i];
+    }
+    if (*static_cast<unsigned long*>(client) != gameBase + clientVtable) return false;
     using Get = void* (*)(void*);
-    void* sender = method<Get>(client, chat::clientSenderSlot)(client);
-    if (!sender) return false;
-    alignas(8) unsigned char packet[chat::commandPacketSize]{};
-    constructCommandPacket(packet);
-    // The native constructor initializes the command and origin strings. Replace
-    // the empty command string using the game's own libc++ string constructor.
-    constructNativeString(packet + chat::commandText, command, length(command));
-    method<void (*)(void*, const void*)>(sender, chat::senderSendSlot)(sender, packet);
-    method<void (*)(void*)>(packet, 0)(packet);
+    void* player = method<Get>(client, chat::clientPlayerSlot)(client);
+    if (!player || !hooks::readable(reinterpret_cast<unsigned long>(player), chat::playerLevel, 8)) return false;
+    void* level = *reinterpret_cast<void**>(static_cast<unsigned char*>(player) + chat::playerLevel);
+    if (!level || !hooks::readable(reinterpret_cast<unsigned long>(client), chat::clientMinecraft, 8)) return false;
+    void* minecraft = *reinterpret_cast<void**>(static_cast<unsigned char*>(client) + chat::clientMinecraft);
+    if (!minecraft || !hooks::readable(reinterpret_cast<unsigned long>(minecraft), chat::minecraftCommands, 8)) return false;
+    void* commands = *reinterpret_cast<void**>(static_cast<unsigned char*>(minecraft) + chat::minecraftCommands);
+    if (!commands || !hooks::readable(reinterpret_cast<unsigned long>(commands), 0, 0x58)) return false;
+    const unsigned long* uniqueId = playerUniqueId(player);
+    if (!uniqueId || !hooks::readable(reinterpret_cast<unsigned long>(uniqueId), 0, 8)) return false;
+    // Match the 40-byte PlayerCommandOrigin built at 0xb56a662..0xb56a69b.
+    // The executor borrows this context synchronously, then builds a command
+    // packet for a remote server or performs native local execution/feedback.
+    struct PlayerOrigin { unsigned long table; CommandUuid uuid; unsigned long actor; void* level; };
+    static_assert(sizeof(PlayerOrigin) == 40, "PlayerCommandOrigin ABI");
+    PlayerOrigin origin{gameBase + chat::playerCommandOriginVtable, newCommandUuid(0), *uniqueId, level};
+    struct CommandContext { alignas(8) unsigned char text[24]; void* origin; unsigned int version; };
+    static_assert(sizeof(CommandContext) == 40, "CommandContext ABI");
+    CommandContext context{};
+    context.origin = &origin;
+    context.version = chat::commandVersion;
+    constructNativeString(context.text, text, size + 1);
+    executeCommand(commands, &context, false);
+    destroyString(context.text);
     return true;
 }
-void dispatch(void* dispatcher, const void* network, void* handler, void* sharedPacket) {
-    auto_gg_lobby_dispatch(handler);
-    auto packet = *static_cast<unsigned char**>(sharedPacket);
-    char text[4097], reply[256]{};
-    bool hidden = false;
-    if (packet && packetMessage(packet, text)) {
+bool blacklistMessage(const ChatMessage& message) {
+    Lock lock;
+    return ready && blacklisted(message.text);
+}
+void autoGGMessage(const ChatMessage& message) {
+    char reply[256]{};
+    {
         Lock lock;
-        hidden = ready && blacklisted(text);
+        if (!ready || !enabled || !*response || contains(response, trigger)
+            || !contains(message.text, trigger)) return;
         double time = now();
-        if (ready && enabled && *response && !contains(response, trigger) && contains(text, trigger)) {
-            if (!__atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) {
-                setStatus(__atomic_load_n(&blockedReason, __ATOMIC_ACQUIRE));
-            } else if (time - lastMatch < 15) {
-                setStatus("AutoGG: duplicate match ignored (15 seconds)");
-            } else {
-                lastMatch = time;
-                copy(reply, response, sizeof(reply));
-            }
+        if (!__atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) {
+            setStatus(__atomic_load_n(&blockedReason, __ATOMIC_ACQUIRE));
+        } else if (time - lastMatch < 15) {
+            setStatus("AutoGG: duplicate match ignored (15 seconds)");
+        } else {
+            lastMatch = time;
+            copy(reply, response, sizeof(reply));
         }
     }
-    if (!hidden) originalDispatch(dispatcher, network, handler, sharedPacket);
     if (*reply && __atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) {
-        bool sent = sendChat(handler, reply);
+        bool sent = sendChat(message.handler, reply);
         if (sent) setStatus("AutoGG: response sent");
         if (!sent) { Lock lock; lastMatch = -30; }
     }
+}
+bool partyMessage(const ChatMessage& message) {
+    return ready && handlePartyInvite(message.handler, message.text);
+}
+void dispatch(void* dispatcher, const void* network, void* handler, void* sharedPacket) {
+    auto_gg_lobby_dispatch(handler);
+    auto packet = sharedPacket ? *static_cast<unsigned char**>(sharedPacket) : nullptr;
+    char text[4097];
+    bool decoded = ready && packet && packetMessage(packet, text);
+    ChatMessage message{text, handler};
+    bool hidden = decoded && chat_notify(message);
+    if (!hidden) originalDispatch(dispatcher, network, handler, sharedPacket);
+    if (decoded) chat_notify_after(message);
 }
 
 template<int Index> void lobbyDispatch(void* dispatcher, const void* network, void* handler, void* packet) {
@@ -293,15 +352,124 @@ void lobbyAnswer(PopupAnswer answer, void* context) {
         || lobbyConfirmation.ticket != reinterpret_cast<unsigned long>(context)) return;
     if (answer == PopupAnswer::Yes && savedLobbyWatch.enabled) {
         lobbyConfirmation.state = LobbyConfirmation::Approved;
-        setStatus("Lobby Scanner: confirmed, waiting for native dispatch");
+        setStatus("Lobby Scanner: confirmed, queued for gameplay update");
     } else {
         lobbyConfirmation.state = LobbyConfirmation::Idle;
         setStatus("Lobby Scanner: action declined");
     }
 }
+void partyAnswer(PopupAnswer answer, void* context) {
+    Lock lock;
+    if (partyInvite.state != PartyInvite::Waiting
+        || partyInvite.ticket != reinterpret_cast<unsigned long>(context)) return;
+    if (answer == PopupAnswer::Yes && savedCCUtils.enabled && savedCCUtils.partyInvites) {
+        partyInvite.state = PartyInvite::Approved;
+    } else {
+        partyInvite.state = PartyInvite::Idle;
+    }
+}
+void cancelPartyInvite() {
+    unsigned long ticket;
+    {
+        Lock lock;
+        ticket = partyInvite.ticket;
+        partyInvite.state = PartyInvite::Idle;
+    }
+    popup_cancel_if(partyAnswer, reinterpret_cast<void*>(ticket));
+}
+bool partyPlayer(const char* text, char* player) {
+    static const char phrase[] = "party invite from";
+    for (const char* at = text; *at; ++at) {
+        unsigned int i = 0;
+        while (phrase[i] && at[i] && chatLower(at[i]) == phrase[i]) ++i;
+        if (phrase[i]) continue;
+        const char* start = at + i;
+        if (*start != ' ' && *start != '\t') continue;
+        while (*start == ' ' || *start == '\t') ++start;
+        const char* period = start;
+        while (*period && *period != '.') ++period;
+        if (*period != '.') continue;
+        const char* end = period;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) --end;
+        unsigned long size = end - start;
+        if (!size || size > 64) continue;
+        bool valid = true;
+        for (const char* c = start; c < end; ++c)
+            if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z')
+                || (*c >= '0' && *c <= '9') || *c == '_' || *c == '-' || *c == ' ' || *c == '\t')) valid = false;
+        if (!valid) continue;
+        for (unsigned long j = 0; j < size; ++j) player[j] = start[j];
+        player[size] = 0;
+        return true;
+    }
+    return false;
+}
+
+bool handlePartyInvite(void* handler, const char* text) {
+    {
+        Lock lock;
+        if (!savedCCUtils.enabled || !savedCCUtils.partyInvites) return false;
+    }
+    char player[65];
+    if (!handler || !partyPlayer(text, player)) return false;
+    unsigned long ticket;
+    {
+        Lock lock;
+        if (!savedCCUtils.enabled || !savedCCUtils.partyInvites) return false;
+        if (partyInvite.state != PartyInvite::Idle)
+            return partyInvite.handlerIdentity == reinterpret_cast<unsigned long>(handler)
+                && sameText(partyInvite.player, player);
+        ticket = ++partyTicket;
+        partyInvite.state = PartyInvite::Waiting;
+        partyInvite.ticket = ticket;
+        partyInvite.handlerIdentity = reinterpret_cast<unsigned long>(handler);
+        partyInvite.clientIdentity = reinterpret_cast<unsigned long>(clientFromHandler(handler));
+        copy(partyInvite.player, player, sizeof(partyInvite.player));
+    }
+    char message[96] = "Accept party invite from ";
+    copy(message + length(message), player, sizeof(message) - length(message));
+    if (popup_show("Party invite", message, partyAnswer, reinterpret_cast<void*>(ticket))) return true;
+    {
+        Lock lock;
+        if (partyInvite.ticket == ticket) partyInvite.state = PartyInvite::Idle;
+    }
+    return false;
+}
 void lobbySendStatus(bool sent, bool publicText) {
     setStatus(sent ? (publicText ? "Lobby Scanner: public message sent" : "Lobby Scanner: command requested")
                    : (publicText ? "Lobby Scanner: public message send failed" : "Lobby Scanner: command request failed"));
+}
+
+void confirmedActions(const ChatLiveContext& context) {
+    PartyInvite party;
+    LobbyConfirmation lobby;
+    {
+        Lock lock;
+        if (!ready || !__atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) return;
+        const unsigned long identity = reinterpret_cast<unsigned long>(context.client);
+        if (partyInvite.state == PartyInvite::Approved && partyInvite.clientIdentity == identity
+            && savedCCUtils.enabled && savedCCUtils.partyInvites) {
+            party = partyInvite;
+            partyInvite.state = PartyInvite::Idle;
+        }
+        if (lobbyConfirmation.state == LobbyConfirmation::Approved && lobbyConfirmation.clientIdentity == identity
+            && savedLobbyWatch.enabled) {
+            lobby = lobbyConfirmation;
+            lobbyConfirmation.state = LobbyConfirmation::Idle;
+        }
+    }
+    // Consume before native calls, which may reenter client getters.
+    if (party.state == PartyInvite::Approved) {
+        char command[80] = "p accept ";
+        const unsigned long prefix = length(command);
+        copy(command + prefix, party.player, sizeof(command) - prefix);
+        for (char* at = command + prefix; *at; ++at)
+            if (*at == ' ' || *at == '\t') *at = '_';
+        setStatus(chat_send_command(context, command) ? "CC Utils: party acceptance requested"
+                                                     : "CC Utils: party invite command failed");
+    }
+    if (lobby.state == LobbyConfirmation::Approved)
+        lobbySendStatus(lobby.publicText ? chat_send_text(context, lobby.text) : chat_send_command(context, lobby.text), lobby.publicText);
 }
 
 unsigned long findGame() {
@@ -331,6 +499,20 @@ bool installHook(unsigned long base) {
         || !hooks::matches_pointer(base, dispatcherSlot, dispatchFunction)
         || !hooks::matches_pointer(base, handlerVtable + chat::textHandlerSlot, handleTextFunction)
         || !hooks::matches_pointer(base, legacyHandlerVtable + chat::textHandlerSlot, handleTextFunction)) return false;
+    if (!hooks::readable(base, chat::commandUuidGenerator, sizeof(chat::commandUuidGeneratorSignature), true)
+        || !hooks::matches(base, chat::commandUuidGenerator, chat::commandUuidGeneratorSignature,
+                           sizeof(chat::commandUuidGeneratorSignature))) return false;
+    const unsigned long commandFunctions[] = {chat::clientMinecraftGetter, chat::nativeCommandExecute,
+                                             chat::playerUniqueIdGetter, chat::commandOriginData};
+    const unsigned char* commandSignatures[] = {chat::clientMinecraftGetterSignature, chat::nativeCommandExecuteSignature,
+                                               chat::playerUniqueIdGetterSignature, chat::commandOriginDataSignature};
+    const unsigned long commandSizes[] = {sizeof(chat::clientMinecraftGetterSignature), sizeof(chat::nativeCommandExecuteSignature),
+                                          sizeof(chat::playerUniqueIdGetterSignature), sizeof(chat::commandOriginDataSignature)};
+    for (int i = 0; i < 4; ++i)
+        if (!hooks::readable(base, commandFunctions[i], commandSizes[i], true)
+            || !hooks::matches(base, commandFunctions[i], commandSignatures[i], commandSizes[i])) return false;
+    if (!hooks::matches_pointer(base, chat::playerCommandOriginVtable + 0xd0, chat::commandOriginType)
+        || !hooks::matches_pointer(base, chat::playerCommandOriginVtable + 0xd8, chat::commandOriginData)) return false;
     for (int i = 0; i < 3; ++i) {
         unsigned char signature[] = {0x48,0x89,0xd7,0x48,0x8b,0x11,0x48,0x8b,0x07,
                                      0x48,0x8b,0x80,0,0,0,0,0xff,0xe0};
@@ -343,9 +525,13 @@ bool installHook(unsigned long base) {
             || !hooks::matches_pointer(base, handlerVtable + chat::lobbyHandlerSlots[i], chat::lobbyBaseHandlers[i])
             || !hooks::matches_pointer(base, legacyHandlerVtable + chat::lobbyHandlerSlots[i], chat::lobbyLegacyHandlers[i])) return false;
     }
+    if (!hooks::readable(base, chat::clientPlayerGetter, sizeof(chat::clientPlayerGetterSignature), true)
+        || !hooks::matches(base, chat::clientPlayerGetter, chat::clientPlayerGetterSignature,
+                           sizeof(chat::clientPlayerGetterSignature))) return false;
     // Fail before patching if another mod replaced an ABI-dependent getter.
     const unsigned long getters[][2] = {
         {chat::clientPlayerSlot, chat::clientPlayerGetter},
+        {chat::clientMinecraftSlot, chat::clientMinecraftGetter},
         {chat::clientXuidSlot, chat::clientXuidGetter},
         {chat::clientIdentitySlot, chat::clientIdentityGetter},
         {chat::clientSenderSlot, chat::clientSenderGetter},
@@ -356,17 +542,34 @@ bool installHook(unsigned long base) {
     originalDispatch = reinterpret_cast<Dispatch>(base + dispatchFunction);
     gameBase = base;
     createChat = reinterpret_cast<CreateChat>(base + chatConstructor);
-    constructCommandPacket = reinterpret_cast<ConstructCommandPacket>(base + chat::commandPacketConstructor);
     constructNativeString = reinterpret_cast<ConstructNativeString>(base + chat::nativeStringConstructor);
     destroyString = reinterpret_cast<void (*)(void*)>(base + stringDestructor);
-    hooks::Patch patches[4] = {{dispatcherSlot, base + dispatchFunction, reinterpret_cast<unsigned long>(&dispatch)}};
+    executeCommand = reinterpret_cast<int (*)(void*, const void*, bool)>(base + chat::nativeCommandExecute);
+    playerUniqueId = reinterpret_cast<const unsigned long* (*)(void*)>(base + chat::playerUniqueIdGetter);
+    newCommandUuid = reinterpret_cast<CommandUuid (*)(int)>(base + chat::commandUuidGenerator);
+    originalPlayerGetter = reinterpret_cast<void* (*)(void*)>(base + chat::clientPlayerGetter);
+    hooks::Patch patches[5] = {{dispatcherSlot, base + dispatchFunction, reinterpret_cast<unsigned long>(&dispatch)}};
     Dispatch callbacks[] = {lobbyDispatch<0>, lobbyDispatch<1>, lobbyDispatch<2>};
     for (int i = 0; i < 3; ++i) {
         lobbyOriginals[i] = reinterpret_cast<Dispatch>(base + chat::lobbyDispatchFunctions[i]);
         patches[i + 1] = {chat::lobbyDispatchSlots[i], base + chat::lobbyDispatchFunctions[i],
                           reinterpret_cast<unsigned long>(callbacks[i])};
     }
-    return hooks::install("AutoGG", base, patches, 4) == hooks::InstallResult::Installed;
+    patches[4] = {clientVtable + chat::clientPlayerSlot, base + chat::clientPlayerGetter,
+                  reinterpret_cast<unsigned long>(&observePlayer)};
+    return hooks::install("AutoGG", base, patches, 5) == hooks::InstallResult::Installed;
+}
+
+void* observePlayer(void* client) {
+    void* player = originalPlayerGetter(client);
+    // The camera calls this getter every gameplay update; preserve its result
+    // and borrow its live client instead of retaining a dispatcher handler.
+    if (player && ready && __atomic_load_n(&canSend, __ATOMIC_ACQUIRE)
+        && !__atomic_test_and_set(&liveDispatchBusy, __ATOMIC_ACQUIRE)) {
+        chat_notify_live({client});
+        __atomic_clear(&liveDispatchBusy, __ATOMIC_RELEASE);
+    }
+    return player;
 }
 
 void findConfigPath() {
@@ -399,7 +602,7 @@ void loadConfig() {
         migrating = file != nullptr;
     }
     if (!file) return;
-    char lines[30][512]{};
+    char lines[46][512]{};
     bool complete = true;
     for (int i = 0; i < 4; ++i) {
         auto& line = lines[i];
@@ -412,7 +615,17 @@ void loadConfig() {
     bool version9 = complete && length(lines[0]) == 7 && contains(lines[0], "AUTOGG9");
     bool version10 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG10");
     bool version16 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG16");
+    bool version22 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG22");
+    bool version21 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG21");
+    version21 = version21 || version22;
+    bool version20 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG20");
+    bool version19 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG19");
+    bool version18 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG18");
     bool version17 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG17");
+    version20 = version20 || version21;
+    version19 = version19 || version20;
+    version18 = version18 || version19;
+    version17 = version17 || version18;
     version16 = version16 || version17;
     bool version15 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG15");
     version15 = version15 || version16;
@@ -537,6 +750,50 @@ void loadConfig() {
             complete = false;
         if (i == 29 && !validText(lines[i])) complete = false;
     }
+    if (version18) for (int i = 30; i < 32; ++i) {
+        if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+        unsigned long n = length(lines[i]);
+        if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+        if (i == 30 && (length(lines[i]) != 1 || (lines[i][0] != '0' && lines[i][0] != '1')))
+            complete = false;
+    }
+    if (version19) for (int i = 32; i < 35; ++i) {
+        if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+        unsigned long n = length(lines[i]);
+        if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+        if (i < 34 && (length(lines[i]) != 1 || (lines[i][0] != '0' && lines[i][0] != '1')))
+            complete = false;
+    }
+    if (version20) for (int i = 35; i < 37; ++i) {
+        if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+        unsigned long n = length(lines[i]);
+        if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+    }
+    EnvironmentSettings environment;
+    if (version21) {
+        for (int i = 37; i < 44; ++i) {
+            if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+            unsigned long n = length(lines[i]);
+            if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+            if (i < 40 && (length(lines[i]) != 1 || (lines[i][0] != '0' && lines[i][0] != '1')))
+                complete = false;
+        }
+        environment = {lines[37][0] == '1', lines[38][0] == '1', lines[39][0] == '1',
+                       parseRange(lines[40], 0, 23999), parseRange(lines[41], 0, 360),
+                       parseRange(lines[42], 0, 100), parseRange(lines[43], 0, 100)};
+        if (environment.ticks < 0 || environment.hue < 0 || environment.saturation < 0 || environment.value < 0)
+            complete = false;
+    }
+    if (version22) for (int i = 44; i < 46; ++i) {
+        if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+        unsigned long n = length(lines[i]);
+        if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+        if (length(lines[i]) != 1 || (lines[i][0] != '0' && lines[i][0] != '1')) complete = false;
+    }
+    int fpsInterval = version19 ? parseRange(lines[34], version20 ? 250 : 100, version20 ? 2000 : 5000) : 1000;
+    int fpsScale = version20 ? parseRange(lines[35], 0, ui_scale::count - 1) : 2;
+    int fpsAnchor = version20 ? parseRange(lines[36], 0, 3) : 0;
+    int renderRadius = version18 ? parseRange(lines[31], 16, 256) : 128;
     int renderBelow = version9 ? parseRange(lines[20], 16, 256) : 64;
     int renderAbove = version9 ? parseRange(lines[21], 16, 256) : 128;
     int zoomScroll = version7 ? parseRange(lines[15], 1, 50) : 5;
@@ -566,7 +823,8 @@ void loadConfig() {
             && length(lines[11]) == 1 && (lines[11][0] == '0' || lines[11][0] == '1'));
     if (complete && !getLine(extra, sizeof(extra), file)
         && ((length(lines[0]) == 7 && contains(lines[0], "AUTOGG1")) || hasModuleSettings)
-        && renderBelow >= 16 && renderAbove >= 16
+        && fpsInterval >= 100 && (!version20 || fpsInterval % 250 == 0) && fpsScale >= 0 && fpsAnchor >= 0
+        && renderBelow >= 16 && renderAbove >= 16 && renderRadius >= 16
         && zoomScroll >= 1 && zoomDefault >= 15 && validZoom && validModuleSettings && validFpsSettings && validBlurSettings && length(lines[1]) == 1
         && (lines[1][0] == '0' || lines[1][0] == '1')
         && validText(lines[2]) && validText(lines[3]) && lines[3][0] != '/') {
@@ -591,7 +849,7 @@ void loadConfig() {
         savedZoomKey = zoomKey; savedZoomDefault = zoomDefault; savedZoomScroll = zoomScroll;
         savedCenterCursor = version8 && lines[16][0] == '1';
         savedRender = {hasRenderSettings && lines[17][0] == '1', hasRenderSettings && lines[18][0] == '1',
-                       hasRenderSettings && lines[19][0] == '1', renderBelow, renderAbove};
+                       hasRenderSettings && lines[19][0] == '1', renderBelow, renderAbove, version18 && lines[30][0] == '1', renderRadius};
         savedTablistMojangles = version16 && lines[27][0] == '1';
         savedLobbyWatch = {};
         if (version17) {
@@ -606,7 +864,13 @@ void loadConfig() {
             savedChatMods.blacklist = lines[25][0] == '1';
             copy(savedChatMods.keywords, lines[26], sizeof(savedChatMods.keywords));
         }
-        if (migrating || !version17) dirty = true;
+        if (fpsInterval < 250) fpsInterval = 250;
+        if (fpsInterval > 2000) fpsInterval = 2000;
+        fpsInterval = (fpsInterval + 125) / 250 * 250;
+        savedFpsDisplay = {version19 && lines[32][0] == '1', version19 && lines[33][0] == '1', fpsInterval, fpsScale, fpsAnchor};
+        savedEnvironment = environment;
+        savedCCUtils = {version22 && lines[44][0] == '1', version22 && lines[45][0] == '1'};
+        if (migrating || !version22) dirty = true;
     } else setStatus("AutoGG settings invalid; using defaults");
     closeFile(file);
 }
@@ -617,8 +881,11 @@ void saveConfig() {
     int strength, fpsLimit, averageHz, zoomKey, zoomDefault, zoomScroll;
     bool zoom;
     RenderSettings render;
+    EnvironmentSettings environment;
+    FpsDisplaySettings fpsDisplay;
     ChatModsSettings chatMods;
     LobbyWatchSettings lobbyWatch;
+    CCUtilsSettings ccUtils;
     {
         Lock lock;
         if (!dirty) return;
@@ -626,8 +893,10 @@ void saveConfig() {
         savedEnabled = enabled;
         tablistMojangles = savedTablistMojangles;
         centerCursor = savedCenterCursor; tablist = savedTablist; particles = savedParticles;
-        render = savedRender; chatMods = savedChatMods;
+        environment = savedEnvironment;
+        render = savedRender; chatMods = savedChatMods; fpsDisplay = savedFpsDisplay;
         lobbyWatch = savedLobbyWatch;
+        ccUtils = savedCCUtils;
         zoom = savedZoom; zoomKey = savedZoomKey; zoomDefault = savedZoomDefault; zoomScroll = savedZoomScroll;
         sprint = savedSprint; blur = savedBlur; strength = savedBlurStrength;
         fpsLimitEnabled = savedFpsLimitEnabled; fpsLimit = savedFpsLimit;
@@ -641,7 +910,7 @@ void saveConfig() {
     FILE* file = openFile(temporary, "w");
     if (!file) { setStatus("AutoGG settings could not be saved"); return; }
     char flag[] = {savedEnabled ? '1' : '0', '\n'};
-    bool ok = writeFile("AUTOGG17\n", 1, 9, file) == 9 && writeFile(flag, 1, 2, file) == 2;
+    bool ok = writeFile("AUTOGG22\n", 1, 9, file) == 9 && writeFile(flag, 1, 2, file) == 2;
     const char* texts[] = {savedTrigger, savedResponse};
     for (const char* text : texts) {
         unsigned long n = length(text);
@@ -672,7 +941,7 @@ void saveConfig() {
     ok = writeFile(blurFlags, 1, 2, file) == 2
         && writeFile(averageLine, 1, averageLength, file) == averageLength
         && writeFile(blurFlags + 2, 1, 2, file) == 2 && ok;
-    char zoomFlag[] = {zoom ? '1' : '0', '\n'}, zoomLine[4];
+    char zoomFlag[] = {zoom ? '1' : '0', '\n'}, zoomLine[5];
     unsigned long zoomLength = formatIntLine(zoomKey, zoomLine);
     ok = writeFile(zoomFlag, 1, 2, file) == 2
         && writeFile(zoomLine, 1, zoomLength, file) == zoomLength && ok;
@@ -713,6 +982,28 @@ void saveConfig() {
     ok = writeFile(lobbyFlag, 1, sizeof(lobbyFlag), file) == sizeof(lobbyFlag) && ok;
     ok = writeFile(lobbyWatch.rules, 1, lobbyRulesLength, file) == lobbyRulesLength
         && writeFile("\n", 1, 1, file) == 1 && ok;
+    char horizontalFlag[] = {render.horizontal ? '1' : '0', '\n'};
+    unsigned long radiusLength = formatIntLine(render.radius, zoomLine);
+    ok = writeFile(horizontalFlag, 1, 2, file) == 2
+        && writeFile(zoomLine, 1, radiusLength, file) == radiusLength && ok;
+    char displayFlags[] = {fpsDisplay.enabled ? '1' : '0', '\n', fpsDisplay.low ? '1' : '0', '\n'};
+    unsigned long intervalLength = formatIntLine(fpsDisplay.intervalMs, zoomLine);
+    ok = writeFile(displayFlags, 1, sizeof(displayFlags), file) == sizeof(displayFlags)
+        && writeFile(zoomLine, 1, intervalLength, file) == intervalLength && ok;
+    int displayValues[] = {fpsDisplay.fontScale, fpsDisplay.anchor};
+    for (int value : displayValues) {
+        unsigned long n = formatIntLine(value, zoomLine);
+        ok = writeFile(zoomLine, 1, n, file) == n && ok;
+    }
+    const int environmentValues[] = {environment.enabled, environment.time, environment.fog,
+                                     environment.ticks, environment.hue, environment.saturation, environment.value};
+    for (int value : environmentValues) {
+        char line[7];
+        unsigned long n = formatIntLine(value, line);
+        ok = writeFile(line, 1, n, file) == n && ok;
+    }
+    char ccFlags[] = {ccUtils.enabled ? '1' : '0', '\n', ccUtils.partyInvites ? '1' : '0', '\n'};
+    ok = writeFile(ccFlags, 1, sizeof(ccFlags), file) == sizeof(ccFlags) && ok;
     ok = closeFile(file) == 0 && ok;
     if (!ok || renameFile(temporary, configPath) != 0) setStatus("AutoGG settings could not be saved");
 
@@ -720,7 +1011,26 @@ void saveConfig() {
 
 }
 
+const char* chat_error() { return error; }
+bool chat_send_command(void* handler, const char* command) {
+    if (!ready || !__atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) return false;
+    return sendCommandClient(clientFromHandler(handler), command);
+}
+
+bool chat_send_command(const ChatLiveContext& context, const char* command) {
+    if (!ready || !__atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) return false;
+    return sendCommandClient(context.client, command);
+}
+bool chat_send_text(const ChatLiveContext& context, const char* text) {
+    if (!ready || !text || !validText(text) || !__atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) return false;
+    return sendChatClient(context.client, text);
+}
+
 void auto_gg_init() {
+    if (!chat_listen(blacklistMessage) || !chat_listen(partyMessage)
+        || !chat_listen(nullptr, autoGGMessage) || !chat_listen_live(confirmedActions)) {
+        error = "Chat: listener limit reached"; return;
+    }
     void* libc = mcpelauncher_host_dlopen("libc.so.6", 2);
     if (!libc) { error = "AutoGG: host API unavailable"; return; }
 #define LOAD(variable, name) variable = reinterpret_cast<decltype(variable)>(mcpelauncher_host_dlsym(libc, name)); if (!variable) { error = "AutoGG: host API unavailable"; return; }
@@ -836,6 +1146,11 @@ void auto_gg_update(bool gameplay, bool focused) {
     __atomic_store_n(&canSend, gameplay && focused, __ATOMIC_RELEASE);
 }
 
+void auto_gg_world_reset() {
+    cancelPartyInvite();
+    auto_gg_lobby_reset();
+}
+
 void auto_gg_lobby_reset() {
     unsigned long ticket;
     {
@@ -848,31 +1163,15 @@ void auto_gg_lobby_reset() {
 
 void auto_gg_lobby_dispatch(void* handler) {
     if (!ready || !handler) return;
+    const unsigned long identity = reinterpret_cast<unsigned long>(handler);
+    bool resetParty, resetLobby;
     {
         Lock lock;
-        if (lobbyConfirmation.state == LobbyConfirmation::Idle
-            || (lobbyConfirmation.handlerIdentity == reinterpret_cast<unsigned long>(handler)
-                && (lobbyConfirmation.state == LobbyConfirmation::Waiting
-                    || !__atomic_load_n(&canSend, __ATOMIC_ACQUIRE)))) return;
+        resetParty = partyInvite.state != PartyInvite::Idle && partyInvite.handlerIdentity != identity;
+        resetLobby = lobbyConfirmation.state != LobbyConfirmation::Idle && lobbyConfirmation.handlerIdentity != identity;
     }
-    if (!hooks::readable(reinterpret_cast<unsigned long>(handler), 0, 8)) return;
-    unsigned long table = *static_cast<unsigned long*>(handler);
-    if (table != gameBase + handlerVtable && table != gameBase + legacyHandlerVtable) return;
-    bool reset = false;
-    LobbyConfirmation action;
-    {
-        Lock lock;
-        if (lobbyConfirmation.state == LobbyConfirmation::Idle) return;
-        reset = lobbyConfirmation.handlerIdentity != reinterpret_cast<unsigned long>(handler);
-        if (!reset && lobbyConfirmation.state == LobbyConfirmation::Approved
-            && savedLobbyWatch.enabled && __atomic_load_n(&canSend, __ATOMIC_ACQUIRE)) {
-            action = lobbyConfirmation;
-            lobbyConfirmation.state = LobbyConfirmation::Idle; // Consume before native sender reentry.
-        }
-    }
-    if (reset) { auto_gg_lobby_reset(); return; }
-    if (action.state == LobbyConfirmation::Approved)
-        lobbySendStatus(action.publicText ? sendChat(handler, action.text) : sendCommand(handler, action.text), action.publicText);
+    if (resetParty) cancelPartyInvite();
+    if (resetLobby) auto_gg_lobby_reset();
 }
 
 void auto_gg_lobby_player(void* handler, const char* name) {
@@ -932,6 +1231,7 @@ void auto_gg_lobby_player(void* handler, const char* name) {
                         lobbyConfirmation.state = LobbyConfirmation::Waiting;
                         lobbyConfirmation.ticket = ticket;
                         lobbyConfirmation.handlerIdentity = reinterpret_cast<unsigned long>(handler);
+                        lobbyConfirmation.clientIdentity = reinterpret_cast<unsigned long>(clientFromHandler(handler));
                         lobbyConfirmation.publicText = publicText;
                         copy(lobbyConfirmation.text, text, sizeof(lobbyConfirmation.text));
                     }
@@ -944,7 +1244,7 @@ void auto_gg_lobby_player(void* handler, const char* name) {
                     if (!popup_show(title, question, lobbyAnswer, reinterpret_cast<void*>(ticket))) {
                         auto_gg_lobby_reset(); setStatus("Lobby Scanner: popup busy, action skipped");
                     } else setStatus("Lobby Scanner: awaiting confirmation");
-                } else lobbySendStatus(publicText ? sendChat(handler, text) : sendCommand(handler, text), publicText);
+                } else lobbySendStatus(publicText ? sendChat(handler, text) : chat_send_command(handler, text), publicText);
             }
             return;
         }
@@ -964,7 +1264,8 @@ void client_settings_set_render(const RenderSettings& settings) {
     Lock lock;
     if (savedRender.enabled != settings.enabled || savedRender.below != settings.below
         || savedRender.above != settings.above || savedRender.belowDistance != settings.belowDistance
-        || savedRender.aboveDistance != settings.aboveDistance) dirty = true;
+        || savedRender.aboveDistance != settings.aboveDistance
+        || savedRender.horizontal != settings.horizontal || savedRender.radius != settings.radius) dirty = true;
     savedRender = settings;
 }
 
@@ -998,9 +1299,54 @@ void client_settings_set_lobby_watch(const LobbyWatchSettings& settings) {
     }
     if (changed) auto_gg_lobby_reset();
 }
+CCUtilsSettings client_settings_get_cc_utils() { Lock lock; return savedCCUtils; }
+void client_settings_set_cc_utils(CCUtilsSettings settings) {
+    bool cancel = false;
+    {
+        Lock lock;
+        if (savedCCUtils.enabled != settings.enabled || savedCCUtils.partyInvites != settings.partyInvites)
+            dirty = true;
+        savedCCUtils = settings;
+        cancel = !settings.enabled || !settings.partyInvites;
+    }
+    if (cancel) cancelPartyInvite();
+}
 
 bool client_settings_get_tablist_mojangles() { Lock lock; return savedTablistMojangles; }
 void client_settings_set_tablist_mojangles(bool value) {
     Lock lock;
     if (savedTablistMojangles != value) { savedTablistMojangles = value; dirty = true; }
+}
+
+FpsDisplaySettings client_settings_get_fps_display() { Lock lock; return savedFpsDisplay; }
+void client_settings_set_fps_display(FpsDisplaySettings settings) {
+    if (settings.intervalMs < 250) settings.intervalMs = 250;
+    if (settings.intervalMs > 2000) settings.intervalMs = 2000;
+    settings.intervalMs = (settings.intervalMs + 125) / 250 * 250;
+    if (settings.fontScale < 0) settings.fontScale = 0;
+    if (settings.fontScale >= ui_scale::count) settings.fontScale = ui_scale::count - 1;
+    if (settings.anchor < 0 || settings.anchor > 3) settings.anchor = 0;
+    Lock lock;
+    if (savedFpsDisplay.enabled != settings.enabled || savedFpsDisplay.low != settings.low
+        || savedFpsDisplay.intervalMs != settings.intervalMs || savedFpsDisplay.fontScale != settings.fontScale
+        || savedFpsDisplay.anchor != settings.anchor) dirty = true;
+    savedFpsDisplay = settings;
+}
+
+EnvironmentSettings client_settings_get_environment() { Lock lock; return savedEnvironment; }
+void client_settings_set_environment(EnvironmentSettings settings) {
+    if (settings.ticks < 0) settings.ticks = 0;
+    if (settings.ticks > 23999) settings.ticks = 23999;
+    if (settings.hue < 0) settings.hue = 0;
+    if (settings.hue > 360) settings.hue = 360;
+    if (settings.saturation < 0) settings.saturation = 0;
+    if (settings.saturation > 100) settings.saturation = 100;
+    if (settings.value < 0) settings.value = 0;
+    if (settings.value > 100) settings.value = 100;
+    Lock lock;
+    if (savedEnvironment.enabled != settings.enabled || savedEnvironment.time != settings.time
+        || savedEnvironment.fog != settings.fog || savedEnvironment.ticks != settings.ticks
+        || savedEnvironment.hue != settings.hue || savedEnvironment.saturation != settings.saturation
+        || savedEnvironment.value != settings.value) dirty = true;
+    savedEnvironment = settings;
 }

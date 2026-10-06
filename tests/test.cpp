@@ -4,6 +4,7 @@
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include "../launcher_api.h"
+#include "../render_frame_trace.h"
 #include "../motion_blur.h"
 #include "../analog_input.h"
 #include "../auto_gg.h"
@@ -46,11 +47,21 @@ void client_settings_set_center_cursor(bool) {}
 bool client_settings_get_center_cursor() { return false; }
 extern "C" void game_window_add_mouse_scroll_callback(GameWindowHandle*, void*, bool (*callback)(void*, double, double, double, double)) { scroll = callback; }
 void auto_gg_init() {}
+void gpu_uniform_cache_init() {}
+void gpu_uniform_cache_frame() {}
+void gpu_multidraw_init() {}
+void gpu_multidraw_frame() {}
 void render_init() {}
+void render_trace_frame(long long) {}
+RenderFrameStamp render_frame_trace_begin() { return {}; }
+RenderFrameStamp render_frame_trace_stamp() { return {}; }
+void render_frame_trace_record(RenderFrameStage,RenderFrameStamp) {}
+void render_frame_trace_end(RenderFrameStamp) {}
 void tablist_init() {}
 void experimental_on_keyboard(int, int, bool, bool) {}
 void popup_on_mouse_button(int, int, bool) {}
 void popup_render(bool, long long) {}
+void environment_init() {}
 void particles_init() {}
 void particles_update(bool) {}
 static bool tabHeld, tabCaptured;
@@ -65,6 +76,8 @@ bool tablist_on_scroll(double) { return tabHeld; }
 bool tablist_on_mouse_button(int,int,bool) { return false; }
 extern "C" void game_window_add_mouse_button_callback(GameWindowHandle*,void*,bool (*)(void*,double,double,int,int)) {}
 LobbyWatchSettings client_settings_get_lobby_watch() { return {}; }
+CCUtilsSettings client_settings_get_cc_utils() { return {}; }
+void client_settings_set_cc_utils(CCUtilsSettings) {}
 void client_settings_set_lobby_watch(const LobbyWatchSettings&) {}
 void client_settings_get_modules(bool* sprint, bool* blur, int* strength) {
     *sprint = false; *blur = false; *strength = 30;
@@ -301,3 +314,9 @@ int main() {
 
 ChatModsSettings client_settings_get_chat_mods() { return {}; }
 void client_settings_set_chat_mods(const ChatModsSettings&) {}
+
+FpsDisplaySettings client_settings_get_fps_display() { return {}; }
+void client_settings_set_fps_display(FpsDisplaySettings) {}
+void fps_display_render(bool, long long) {}
+
+bool display_layout_begin_frame() { return true; }

@@ -15,3 +15,4 @@ void auto_gg_lobby_player(void* handler, const char* name);
 // Only pass borrowed handlers from native dispatch; no native object is retained.
 void auto_gg_lobby_dispatch(void* handler);
 void auto_gg_lobby_reset();
+void auto_gg_world_reset();

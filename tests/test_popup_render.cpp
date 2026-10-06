@@ -118,6 +118,25 @@ int main() {
     clear(); popup_render(true, 10100000000LL);
     assert(red(720, 25) == 255); // Normal dismissal follows the one-second result sequence.
     assert(glGetError() == GL_NO_ERROR);
+    // Wrapping adds one body line while leaving the bottom answer row in place.
+    assert(popup_show("Experimental", "Would you like to continue with this longer popup message?"));
+    clear(); popup_render(true, 11000000000LL);
+    clear(); popup_render(true, 11500000000LL);
+    assert(red(720, 95) < 150); // Extra height above the old 89px panel top.
+    assert(red(720, 110) == 255);
+    assert(answerPixels(755, 785) > 8 && answerPixels(875, 903) > 8);
+    for (int bottom = 53; bottom <= 67; bottom += 14) {
+        int bodyPixels = 0;
+        for (int y = bottom; y < bottom + 11; ++y)
+            for (int x = 722; x < 938; ++x)
+                if (red(x, y) > 180) ++bodyPixels;
+        assert(bodyPixels > 10); // Both body lines render at the normal font size.
+    }
+    popup_on_mouse_button(1, 0, true);
+    clear(); popup_render(true, 11600000000LL);
+    clear(); popup_render(true, 12600000000LL);
+    assert(red(720, 95) < 150); // Completion preserves the taller panel.
+    assert(glGetError() == GL_NO_ERROR);
     eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroySurface(display, surface); eglDestroyContext(display, context); eglTerminate(display);
 }

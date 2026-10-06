@@ -18,6 +18,8 @@ bool client_settings_get_center_cursor();
 struct RenderSettings {
     bool enabled = false, below = false, above = false;
     int belowDistance = 64, aboveDistance = 128;
+    bool horizontal = false;
+    int radius = 128;
 };
 RenderSettings client_settings_get_render();
 void client_settings_set_render(const RenderSettings& settings);
@@ -42,5 +44,27 @@ struct LobbyWatchSettings {
 LobbyWatchSettings client_settings_get_lobby_watch();
 void client_settings_set_lobby_watch(const LobbyWatchSettings& settings);
 
+struct CCUtilsSettings {
+    bool enabled = false, partyInvites = false;
+};
+CCUtilsSettings client_settings_get_cc_utils();
+void client_settings_set_cc_utils(CCUtilsSettings settings);
+
 void client_settings_set_tablist_mojangles(bool value);
 bool client_settings_get_tablist_mojangles();
+
+struct FpsDisplaySettings {
+    bool enabled = false, low = false;
+    int intervalMs = 1000;
+    int fontScale = 2; // ui_scale tier index; 2 = 1x.
+    int anchor = 0; // DisplayAnchor order: TL, TR, BL, BR.
+};
+FpsDisplaySettings client_settings_get_fps_display();
+void client_settings_set_fps_display(FpsDisplaySettings settings);
+
+struct EnvironmentSettings {
+    bool enabled = false, time = false, fog = false;
+    int ticks = 6000, hue = 0, saturation = 0, value = 100;
+};
+EnvironmentSettings client_settings_get_environment();
+void client_settings_set_environment(EnvironmentSettings settings);

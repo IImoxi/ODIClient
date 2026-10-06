@@ -22,8 +22,7 @@ constexpr MenuColor mainButtonHover = rgb(0x808080);
 constexpr MenuColor mainButtonEnabledHover = rgb(0xffffff);
 constexpr MenuColor mainButtonOutline = rgb(0xffffff);
 constexpr MenuColor mainButtonEnabledOutline = rgb(0xffffff);
-constexpr MenuColor tileDivider = rgb(0xffffff);
-// Settings buttons, toggle bubbles, and choices.
+// Settings buttons, switch tracks, and choices.
 constexpr MenuColor settingsButton = rgb(0xffffff);
 constexpr MenuColor settingsButtonEnabled = rgb(0xffffff);
 constexpr MenuColor settingsButtonHover = rgb(0xffffff);
@@ -39,8 +38,9 @@ constexpr float hoverButtonOpacity = 0.2f;
 constexpr float enabledHoverButtonOpacity = 0.3f;
 constexpr float buttonOutlineOpacity = 0.15f; // Main tile outlines.
 constexpr float settingsButtonOutlineOpacity = 0.4f;
+constexpr float settingsDividerOpacity = 0.12f;
 constexpr float creditOpacity = 0.45f;
-constexpr float tileDividerTint = 0.15f;
+constexpr float tileDividerOpacity = 0.15f;
 constexpr float textBoxTint = 0.15f;
 
 // Scrollbars (tiles and settings), sliders, and Tablist. Opacities multiply fades.
@@ -82,7 +82,9 @@ constexpr float mainButtonOutlineThickness = 1.5f;
 constexpr float settingsButtonOutlineRadiusPercent = 1.5f;
 constexpr float settingsButtonOutlineThickness = 1.5f; // Zero disables settings outlines.
 constexpr float settingsChoiceRadiusPercent = 1.65f;
-constexpr float settingsStatusRadiusPercent = 1.65f;
+constexpr float switchRadiusPercent = 12.0f; // Percentage of track/thumb height.
+constexpr float switchThumbOpacity = 0.25f;
+constexpr float switchThumbHoverOpacity = 0.1f;
 
 constexpr long long buttonTransitionNs = 180000000LL;
 constexpr long long titleMotionDurationNs = 220000000LL;
@@ -95,8 +97,10 @@ constexpr long long openingCaptureDelayNs = animationDurationNs / 2;
 constexpr int panelPaddingPercent = 8;
 constexpr int contentTopPercent = 19;
 constexpr int footerTopPercent = 91;
-constexpr int rowStridePercent = 14;
-constexpr int rowHeightPercent = 11;
+constexpr int rowStridePercent = 11;
+constexpr int rowHeightPercent = 9;
+constexpr int descriptionFontHeightPercent = 2;
+constexpr int descriptionRowHeightPercent = 3;
+constexpr int descriptionRowStridePercent = 4;
 constexpr int textLineHeightPercent = 4;
-constexpr int multilineBubbleBottomPaddingPercent = 4;
 }

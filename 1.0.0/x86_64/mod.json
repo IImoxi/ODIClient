@@ -4,7 +4,7 @@
   "arch": "x86_64",
   "metadata": {
     "name": "ODIClient",
-    "description": "Press L for ODIClient: hold Tab for a compact player roster with skin heads, selected 3D skin previews, and local PNG saves; Lobby Scanner commands with optional yes/no confirmation, player-hit Particles, Zoom, Auto Sprint, Motion Blur, screen blur, FPS Limit, experimental vertical Render limits, AutoGG, Chat mods with a message blacklist, and Experimental yes/no notifications. Targets launcher 1.8.4 SDL3/Wayland and EGLUT/X11; native hooks support Minecraft 1.26.52.3 Android x86_64.",
+    "description": "Press L for ODIClient: hold Tab for a compact player roster with skin heads, selected 3D skin previews, and local PNG saves; Lobby Scanner commands with optional yes/no confirmation, player-hit Particles, Zoom, Auto Sprint, Motion Blur, screen blur, FPS Display with optional 1% low, font scales, and corner anchoring, FPS Limit, experimental Render limits, Environment time changer and HSV fog color, AutoGG, Chat mods with a message blacklist, and Experimental yes/no notifications. Targets launcher 1.8.4 SDL3/Wayland and EGLUT/X11; native hooks support Minecraft 1.26.52.3 Android x86_64.",
     "versions": [
       {
         "version": "1.0.0",

@@ -60,6 +60,42 @@ void client_set_chat_keywords(const char* value);
 void client_set_lobby_watch(bool value);
 bool client_lobby_watch_enabled();
 void client_set_lobby_watch_rules(const char* value);
+void client_set_cc_utils(bool value);
+bool client_cc_utils_enabled();
+void client_set_party_invites(bool value);
+bool client_party_invites_enabled();
 
 void client_set_experimental(bool value);
 bool client_experimental_enabled();
+
+void client_set_render_horizontal(bool value);
+bool client_render_horizontal();
+void client_set_render_radius(int value);
+int client_render_radius();
+
+void client_set_fps_display(bool value);
+bool client_fps_display_enabled();
+void client_set_fps_low(bool value);
+bool client_fps_low();
+void client_set_fps_interval(int value);
+int client_fps_interval();
+
+void client_set_fps_font_scale(int value);
+int client_fps_font_scale();
+void client_set_fps_anchor(int value);
+int client_fps_anchor();
+
+void client_set_environment(bool value);
+bool client_environment_enabled();
+void client_set_environment_time(bool value);
+bool client_environment_time();
+void client_set_environment_fog(bool value);
+bool client_environment_fog();
+void client_set_environment_ticks(int value);
+int client_environment_ticks();
+void client_set_environment_hue(int value);
+int client_environment_hue();
+void client_set_environment_saturation(int value);
+int client_environment_saturation();
+void client_set_environment_value(int value);
+int client_environment_value();

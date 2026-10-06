@@ -25,6 +25,11 @@ static unsigned long previewSerial;
 static void draw(int icon) {
     if (icon==3) { assert(custom_font_draw_skin(playerSkin,64,64,++previewSerial,160,10,128,width,height)); return; }
     if (icon==4) { assert(custom_font_draw_ring(160,80,24,0.75f,width,height)); return; }
+    if (icon==5 || icon==6) {
+        assert(custom_font_draw_icon(icon==5 ? "assets/icon-switch-cross.png" : "assets/icon-switch-check.png",
+                                     160, 30, 64, 1, 1, 1, width, height));
+        return;
+    }
     if (icon == 2) { assert(custom_font_draw_head(face, 160, 30, 64, width, height)); return; }
     if (icon) assert(custom_font_draw_icon("assets/icon-zoom.png", 160, 30, 64, 1, 1, 1, width, height));
     else {
@@ -83,6 +88,13 @@ int main() {
     assert(activeFontPixels == 24 && atlasTexture == font24);
     assert(vertices[1].x - vertices[0].x > animatedWidth);
     assert((vertices[1].x - vertices[0].x) - animatedWidth < 0.1f);
+    assert(custom_font_draw_scaled("Wg", 160, 10, 24, 0.751f, width, height));
+    assert(activeFontPixels == 24 && atlasTexture == font24);
+    animatedWidth = vertices[1].x - vertices[0].x;
+    assert(custom_font_draw_scaled("Wg", 160, 10, 24, 0.752f, width, height));
+    assert(activeFontPixels == 24 && atlasTexture == font24);
+    assert(vertices[1].x - vertices[0].x > animatedWidth);
+    assert((vertices[1].x - vertices[0].x) - animatedWidth < 0.1f);
     for (int size = 1; size <= 60; ++size) {
         assert(custom_font_text_width("Wg", size) > 0);
         assert(activeFontPixels == size);
@@ -115,7 +127,7 @@ int main() {
     for (int y=8;y<16;++y) for(int x=40;x<48;++x) {
         auto* p=playerSkin+(y*64+x)*4;p[0]=0;p[1]=0;p[2]=255;p[3]=128;
     }
-    for (int icon : {0, 1, 2, 3, 4}) {
+    for (int icon : {0, 1, 2, 3, 4, 5, 6}) {
         reset(); draw(icon);
         glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, reference);
         int visible = 0;

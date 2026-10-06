@@ -93,7 +93,7 @@ void popup_on_mouse_button(int button, int action, bool focused) {
 }
 
 void popup_render(bool focused, long long frameNs) {
-    bool target; float progress = 0, elapsed = 0, resultTime = 0; unsigned long serial; int answer = -1; char title[96], message[256]; bool showingResult;
+    bool target; float progress = 0, elapsed = 0, resultTime = 0; unsigned long serial; int answer = -1; char title[96], message[256]; bool showingResult; const char* resultLabel;
     PopupCallback completed = nullptr; void* context = nullptr; PopupAnswer response = PopupAnswer::No;
     {
         Lock lock;
@@ -123,9 +123,9 @@ void popup_render(bool focused, long long frameNs) {
         } else holdStart = 0;
         target = prompt || (result && frameNs - resultStart < 1000000000LL);
         if (result) resultTime = static_cast<float>(frameNs - resultStart) / 250000000.0f;
-        showingResult = result != nullptr;
+        showingResult = result != nullptr; resultLabel = result;
         copyText(title, popupTitle, sizeof(title));
-        copyText(message, result ? result : popupMessage, sizeof(message));
+        copyText(message, popupMessage, sizeof(message));
     }
     // Callbacks may open another popup; invoke them outside the state lock.
     if (completed) completed(response, context);
@@ -169,8 +169,35 @@ void popup_render(bool focused, long long frameNs) {
     if (scale < 0.75f) scale = 0.75f;
     int width = static_cast<int>(238 * scale), height = static_cast<int>(78 * scale);
     if (width > w - 16) width = w - 16;
-    int margin = static_cast<int>(11 * scale), headerFont = static_cast<int>(15 * scale);
-    int font = static_cast<int>(11 * scale);
+    int margin = static_cast<int>(10 * scale), headerFont = static_cast<int>(12 * scale);
+    int font = static_cast<int>(10 * scale);
+    char first[256], second[256]{};
+    copyText(first, message, sizeof(first));
+    if (custom_font_text_width(first, font) > width - margin * 2) {
+        int split = 0, lastSpace = 0;
+        for (int i = 1; message[i]; ++i) {
+            // Only split at UTF-8 character boundaries.
+            if ((static_cast<unsigned char>(message[i]) & 0xc0) == 0x80) continue;
+            char saved = first[i]; first[i] = 0;
+            int textWidth = custom_font_text_width(first, font);
+            first[i] = saved;
+            if (textWidth > width - margin * 2) break;
+            split = i;
+            if (message[i] == ' ') lastSpace = i;
+        }
+        if (lastSpace) split = lastSpace;
+        if (split) {
+            first[split] = 0;
+            while (message[split] == ' ') ++split;
+            copyText(second, message + split, sizeof(second));
+        }
+    }
+    int lineStep = font + static_cast<int>(3 * scale);
+    if (*second) height += lineStep;
+    int bodyEnd = margin + headerFont + static_cast<int>(3 * scale) + font;
+    if (*second) bodyEnd += lineStep;
+    // Center the answer row between the body and the bottom edge.
+    int answerTop = bodyEnd + (height - bodyEnd - font) / 2;
     int x = w - width - margin + static_cast<int>((width + margin) * (1 - visibility));
     int bottom = margin;
     int top = h - bottom - height;
@@ -197,16 +224,18 @@ void popup_render(bool focused, long long frameNs) {
         float ease = ui_animation::ease_out_quart(t);
         float displayHeight = font + (headerFont - font) * ease;
         float rasterScale = displayHeight / headerFont;
-        float textWidth = custom_font_text_width(message, headerFont) * rasterScale;
-        float initialTop = top + height - margin - font;
+        float textWidth = custom_font_text_width(resultLabel, headerFont) * rasterScale;
+        float initialTop = top + answerTop;
         float centerTop = top + (height - displayHeight) * 0.5f;
         float y = initialTop + (centerTop - initialTop) * ease;
         // Reuse the title-size atlas throughout the growth animation.
-        custom_font_draw_left_scaled(message, x + (width - textWidth) * 0.5f,
+        custom_font_draw_left_scaled(resultLabel, x + (width - textWidth) * 0.5f,
                                       y, headerFont, rasterScale, w, h);
     } else {
         drawLine(title, top + margin, headerFont);
-        drawLine(message, top + margin + headerFont + static_cast<int>(3 * scale), font);
+        int bodyTop = top + margin + headerFont + static_cast<int>(3 * scale);
+        drawLine(first, bodyTop, font);
+        if (*second) drawLine(second, bodyTop + lineStep, font);
     }
     if (!showingResult && target) {
         PanelPaint bar;
@@ -221,7 +250,7 @@ void popup_render(bool focused, long long frameNs) {
         if (filled > 0) draw_gl_panel(x + inset, bottom + 1, filled, barHeight, bar);
     }
     if (!showingResult) {
-        int y = top + height - margin - font;
+        int y = top + answerTop;
         for (int i = 0; i < 2; ++i) {
             const char* label = i == 0 ? "Yes" : "No";
             int textWidth = custom_font_text_width(label, font);
@@ -234,7 +263,8 @@ void popup_render(bool focused, long long frameNs) {
             if (answerBlend[i] > 0.001f) {
                 custom_font_set_opacity(opacity * answerBlend[i]);
                 custom_font_draw_ring(left + textWidth + static_cast<int>(5 * scale) + font / 2,
-                                      y + font / 2, font * 0.45f, progress, w, h);
+                                      y + font / 2 + static_cast<int>(scale + 1.0f),
+                                      font * 0.45f, progress, w, h);
             }
         }
     }

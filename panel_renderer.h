@@ -15,3 +15,14 @@ struct PanelPaint {
 // Bottom-left framebuffer coordinates. Shares the GL adapter in motion_blur.cpp.
 // Preserves touched GL state; rounded edges use pixel coverage, without requiring MSAA.
 bool draw_gl_panel(int x, int y, int width, int height, const PanelPaint& paint);
+
+// Reusable faint white divider: exactly one framebuffer pixel high.
+// Bottom-left coordinates; opacity includes any caller-owned fade.
+inline bool draw_gl_divider(int x, int y, int width, float opacity = 0.12f,
+                            bool inheritScissor = false) {
+    PanelPaint paint;
+    paint.tint = {1.0f, 1.0f, 1.0f};
+    paint.opacity = opacity;
+    paint.inheritScissor = inheritScissor;
+    return draw_gl_panel(x, y, width, 1, paint);
+}

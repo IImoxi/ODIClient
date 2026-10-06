@@ -5,6 +5,8 @@ bool custom_font_draw(const char* text, int centerX, int top, int height,
 bool custom_font_draw_left(const char* text, int leftX, int top, int height,
                            int screenWidth, int screenHeight);
 // Scale glyph geometry from a fixed raster height, retaining fractional display sizes.
+bool custom_font_draw_scaled(const char* text, float x, float top, int height,
+                             float scale, int screenWidth, int screenHeight, bool centered = true);
 bool custom_font_draw_left_scaled(const char* text, float leftX, float top, int height,
                                   float scale, int screenWidth, int screenHeight);
 bool custom_font_draw_left_color(const char* text, int leftX, int top, int height,
@@ -32,5 +34,6 @@ void custom_font_set_mojangles(bool enabled);
 bool custom_font_draw_skin(const unsigned char* rgba, int textureWidth, int textureHeight,
                            unsigned long revision, int centerX, int top, int height,
                            int screenWidth, int screenHeight);
+// Shared antialiased progress ring; positions use the framebuffer pixel space.
 bool custom_font_draw_ring(int centerX, int centerY, float radius, float progress,
                            int screenWidth, int screenHeight);
