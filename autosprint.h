@@ -4,6 +4,7 @@ const char* autosprint_error();
 void autosprint_bind_window();
 void autosprint_update(bool enabled, bool gameplay);
 bool autosprint_has_focus();
+bool autosprint_shift_down();
 void autosprint_release_movement_keys();
 
 void autosprint_center_cursor();

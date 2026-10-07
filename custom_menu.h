@@ -25,7 +25,8 @@ public:
     // Dependent toggles do not start another group. Visible rows get dividers automatically.
     MenuPage& whenEnabled(bool (*isVisible)() = nullptr);
     MenuPage& textBox(const char* label, const char* initialValue = "",
-                      void (*onChange)(const char*) = nullptr, bool multiline = false);
+                      void (*onChange)(const char*) = nullptr, bool multiline = false,
+                      bool commaBubbles = false);
 
 private:
     unsigned int index;

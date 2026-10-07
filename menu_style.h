@@ -41,7 +41,23 @@ constexpr float settingsButtonOutlineOpacity = 0.4f;
 constexpr float settingsDividerOpacity = 0.12f;
 constexpr float creditOpacity = 0.45f;
 constexpr float tileDividerOpacity = 0.15f;
-constexpr float textBoxTint = 0.15f;
+// Text fields and completed comma-separated bubbles.
+constexpr MenuColor textBoxBackground = rgb(0xffffff);
+constexpr MenuColor textBoxOutline = rgb(0xffffff);
+constexpr MenuColor textBoxFocusedOutline = rgb(0xffffff);
+constexpr float textBoxBackgroundOpacity = 0.1f;
+constexpr float textBoxOutlineOpacity = 0.15f;
+constexpr float textBoxFocusedOutlineOpacity = 0.15f;
+constexpr float textBoxOutlineThickness = 2.0f; // Pixels; zero disables outlines.
+constexpr float textBoxRadiusPercent = 0.7f; // Percentage of panel height.
+constexpr MenuColor textBubbleBackground = rgb(0xffffff);
+constexpr MenuColor textBubbleOutline = rgb(0xffffff);
+constexpr float textBubbleBackgroundOpacity = 0.0f;
+constexpr float textBubbleOutlineOpacity = 0.2f;
+constexpr float textBubbleOutlineThickness = 1.0f; // Pixels; zero disables outlines.
+constexpr float textBubbleRadiusPercent = 25.0f; // Percentage of bubble height.
+constexpr float textBubbleHorizontalPaddingPercent = 75.0f; // Percentage of text height per side.
+constexpr float textBubbleVerticalPaddingPercent = 40.0f; // Percentage of text height per side.
 
 // Scrollbars (tiles and settings), sliders, and Tablist. Opacities multiply fades.
 constexpr MenuColor scrollTrack = rgb(0xffffff);
@@ -69,18 +85,18 @@ constexpr float tablistTextOpacity = 1.0f;
 constexpr float tablistBadgeOpacity = 1.0f;
 constexpr float tablistHeadOpacity = 1.0f;
 constexpr float tablistHeadPlaceholderOpacity = 1.0f;
-constexpr float tablistOutlineThickness = 1.5f; // Pixels; zero disables outline.
+constexpr float tablistOutlineThickness = 2.0f; // Pixels; zero disables outline.
 constexpr float tablistHeadPlaceholderRadius = 0.0f; // Pixels.
 constexpr float tablistBlurScale = 6.0f;
 
 // Corner radii are percentages of panel height; outline thicknesses are pixels.
 constexpr float panelRadiusPercent = 2.0f;
 constexpr float panelOutlineRadiusPercent = 1.6f;
-constexpr float panelOutlineThickness = 1.5f;
+constexpr float panelOutlineThickness = 2.0f;
 constexpr float mainButtonOutlineRadiusPercent = 0.8f;
-constexpr float mainButtonOutlineThickness = 1.5f;
+constexpr float mainButtonOutlineThickness = 2.0f;
 constexpr float settingsButtonOutlineRadiusPercent = 1.5f;
-constexpr float settingsButtonOutlineThickness = 1.5f; // Zero disables settings outlines.
+constexpr float settingsButtonOutlineThickness = 2.0f; // Zero disables settings outlines.
 constexpr float settingsChoiceRadiusPercent = 1.65f;
 constexpr float switchRadiusPercent = 12.0f; // Percentage of track/thumb height.
 constexpr float switchThumbOpacity = 0.25f;

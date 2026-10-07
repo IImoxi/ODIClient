@@ -10,6 +10,8 @@ void auto_gg_set_trigger(const char*);
 void auto_gg_set_response(const char*);
 void auto_gg_on_keyboard(int action);
 void auto_gg_update(bool gameplay, bool focused);
+// Queue a passive Shift/right-click; targeting and sending run in a live callback.
+void auto_gg_ping_click();
 void auto_gg_lobby_player(void* handler, const char* name);
 
 // Only pass borrowed handlers from native dispatch; no native object is retained.

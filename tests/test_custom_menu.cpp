@@ -368,8 +368,15 @@ int main(int argc, char** argv) {
     assert(custom_menu_on_keyboard(188, 0));
     assert(custom_menu_on_keyboard(188, 2));
     assert(std::strcmp(pages[0].items[0].value, "lZ!?,") == 0);
-    assert(custom_menu_on_keyboard(37, 0)); // Arrow keys must not insert punctuation.
+    assert(custom_menu_on_keyboard(37, 0));
     assert(custom_menu_on_keyboard(37, 2));
+    assert(custom_menu_on_keyboard(88, 0));
+    assert(custom_menu_on_keyboard(88, 2));
+    assert(std::strcmp(pages[0].items[0].value, "lZ!?x,") == 0);
+    assert(custom_menu_on_keyboard(8, 0));
+    assert(custom_menu_on_keyboard(8, 2));
+    assert(custom_menu_on_keyboard(39, 0));
+    assert(custom_menu_on_keyboard(39, 2));
     pages[0].items[0].multiline = true;
     assert(custom_menu_on_keyboard(272, 0));
     assert(custom_menu_on_keyboard(13, 0));
@@ -389,6 +396,7 @@ int main(int argc, char** argv) {
     // Inspect the actual caret pixels using the same frame drawing path.
     MenuFrame caretFrame;
     caretFrame.page = pages[0]; caretFrame.pageIndex = 0; caretFrame.focused = 0;
+    caretFrame.textCursor = textCursor;
     caretFrame.controls = drawnControls; caretFrame.caretVisible = true;
     menuOpacity = 1.0f;
     drawPageControls(caretFrame, lastScreenWidth, lastScreenHeight);

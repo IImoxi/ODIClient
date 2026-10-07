@@ -1,4 +1,5 @@
 #include <cassert>
+#include <utility>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -7,6 +8,13 @@
 #include <cstdlib>
 #include <sys/mman.h>
 #include "../auto_gg.cpp"
+static const char* pingTarget = "Alex Smith";
+void player_target_init() {}
+const char* player_target_error() { return nullptr; }
+bool player_target_name(const ChatLiveContext&, char* out, unsigned long capacity) {
+    if (!pingTarget || std::strlen(pingTarget) >= capacity) return false;
+    std::strcpy(out, pingTarget); return true;
+}
 static PopupCallback popupCallback;
 static void* popupContext;
 static bool popupBusy;
@@ -117,7 +125,7 @@ static void reset() {
     copy(trigger, "You won the game", sizeof(trigger)); copy(response, "gg", sizeof(response));
 }
 
-int main() {
+int main(int argc, char** argv) {
     auto_gg_init(); // No Minecraft mapped: must gracefully report unavailable.
     assert(!ready && error && !findGame());
     getTime = fakeClock;
@@ -229,6 +237,44 @@ int main() {
     receive("Nothing here");
     assert(forwarded == inviteForwarded + 3 && !popupBusy);
     receive("You have recieved a party invite from Steve.", 3); assert(!popupBusy); // Unsupported variant.
+    // A click is consumed once; cooldown is measured at execution and survives
+    // world/toggle changes. Air clicks, unsafe names and expired requests do not send.
+    client_settings_set_cc_utils({true, false, true});
+    dispatchActions(handlerObject);
+    auto pingCount = commands.size();
+    clockTime = 1000;
+    auto_gg_ping_click(); dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 1 && commands.back() == "/ping Alex_Smith");
+    clockTime = 1002.999;
+    auto_gg_ping_click(); dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 1);
+    auto_gg_world_reset();
+    client_settings_set_cc_utils({}); client_settings_set_cc_utils({true, false, true});
+    dispatchActions(handlerObject);
+    auto_gg_ping_click(); dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 1);
+    clockTime = 1003;
+    auto_gg_ping_click(); dispatchActions(handlerObject); dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 2);
+    clockTime = 1006; pingTarget = nullptr;
+    auto_gg_ping_click(); dispatchActions(handlerObject);
+    pingTarget = "Alex Smith"; dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 2);
+    auto_gg_ping_click(); clockTime += 0.3; dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 2);
+    auto_gg_ping_click(); auto_gg_update(true, false); auto_gg_update(true, true);
+    dispatchActions(handlerObject); assert(commands.size() == pingCount + 2);
+    auto_gg_ping_click(); client_settings_set_cc_utils({});
+    client_settings_set_cc_utils({true, false, true});
+    dispatchActions(handlerObject); assert(commands.size() == pingCount + 2);
+    auto_gg_ping_click(); dispatchActions(otherHandler); dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 2);
+    auto_gg_ping_click(); auto_gg_world_reset(); dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 2);
+    pingTarget = "Bad/name"; auto_gg_ping_click(); dispatchActions(handlerObject);
+    assert(commands.size() == pingCount + 2);
+    pingTarget = "Alex Smith";
+    clockTime = 100;
     client_settings_set_cc_utils({});
     destroyed = stringsDestroyed = 0;
 
@@ -309,7 +355,7 @@ int main() {
     // Unknown classes must still be rejected, even with a valid client pointer.
     *reinterpret_cast<void***>(handlerObject) = reinterpret_cast<void**>(mockImage + legacyHandlerVtable + 8);
     assert(!sendChat(handlerObject, "gg"));
-    assert(std::strstr(auto_gg_status(), "unverified incoming chat handler"));
+    assert(std::strstr(auto_gg_status(), "client instance bridge unavailable"));
     *reinterpret_cast<void***>(handlerObject) = reinterpret_cast<void**>(mockImage + handlerVtable);
     assert(!sendChat(nullptr, "gg"));
     *reinterpret_cast<void***>(clientObject) = nullptr;
@@ -325,21 +371,23 @@ int main() {
     client_settings_set_blur(true, 144, true);
     client_settings_set_zoom(true, 90, 300, 25);
     client_settings_set_particles(true);
-    client_settings_set_cc_utils({true, true});
-    client_settings_set_environment({true, true, true, 18000, 240, 75, 80});
+    client_settings_set_cc_utils({true, true, true});
+    client_settings_set_environment({true, true, true, 18000, 240, 75, 80, true, false, true, true, true, true});
     client_settings_set_fps_display({true, true, 1750, 5, 3});
     lobby.enabled = true; copy(lobby.rules, "steve?/hub,alex?#/hello", sizeof(lobby.rules));
     client_settings_set_lobby_watch(lobby);
     client_settings_set_render({true, true, false, 80, 160, true, 96});
     auto_gg_update(true, true);
     reset(); enabled = false; savedRender = {}; savedParticles = false; savedFpsDisplay = {}; savedEnvironment = {}; savedCCUtils = {}; loadConfig();
-    assert(savedCCUtils.enabled && savedCCUtils.partyInvites);
+    assert(savedCCUtils.enabled && savedCCUtils.partyInvites && savedCCUtils.playerPing);
     assert(client_settings_get_fps_display().enabled && client_settings_get_fps_display().low
            && client_settings_get_fps_display().intervalMs == 1750
            && client_settings_get_fps_display().fontScale == 5 && client_settings_get_fps_display().anchor == 3);
     auto environment = client_settings_get_environment();
     assert(environment.enabled && environment.time && environment.fog && environment.ticks == 18000
-           && environment.hue == 240 && environment.saturation == 75 && environment.value == 80);
+           && environment.hue == 240 && environment.saturation == 75 && environment.value == 80
+           && environment.sky && !environment.clouds && environment.vanillaCelestials
+           && environment.skyLookup && environment.skyHalfResolution && environment.skyReducedSamples);
     client_settings_set_environment({true, true, true, -1, 999, -1, 999});
     assert(savedEnvironment.ticks == 0 && savedEnvironment.hue == 360
            && savedEnvironment.saturation == 0 && savedEnvironment.value == 100);
@@ -356,6 +404,28 @@ int main() {
     auto render = client_settings_get_render();
     assert(render.enabled && render.below && !render.above && render.belowDistance == 80
            && render.aboveDistance == 160 && render.horizontal && render.radius == 96);
+    // Version 24 retains sky settings and defaults the new optimizations off.
+    FILE* oldSky = std::fopen(configPath, "r"); assert(oldSky);
+    char skyLines[50][512]{};
+    for (auto& line : skyLines) assert(std::fgets(line, sizeof(line), oldSky));
+    std::fclose(oldSky);
+    oldSky = std::fopen(configPath, "w"); assert(oldSky);
+    std::fputs("AUTOGG24\n", oldSky);
+    for (int i = 1; i < 50; ++i) std::fputs(skyLines[i], oldSky);
+    std::fclose(oldSky); loadConfig();
+    assert(savedEnvironment.sky && !savedEnvironment.clouds && savedEnvironment.vanillaCelestials);
+    assert(!savedEnvironment.skyLookup && !savedEnvironment.skyHalfResolution && !savedEnvironment.skyReducedSamples);
+    // Version 22 keeps both old CC Utils toggles and defaults player ping off.
+    FILE* oldCC = std::fopen(configPath, "r"); assert(oldCC);
+    char ccLines[46][512]{};
+    for (auto& line : ccLines) assert(std::fgets(line, sizeof(line), oldCC));
+    std::fclose(oldCC);
+    oldCC = std::fopen(configPath, "w"); assert(oldCC);
+    std::fputs("AUTOGG22\n", oldCC);
+    for (int i = 1; i < 46; ++i) std::fputs(ccLines[i], oldCC);
+    std::fclose(oldCC);
+    savedCCUtils = {}; loadConfig();
+    assert(savedCCUtils.enabled && savedCCUtils.partyInvites && !savedCCUtils.playerPing);
     // Version 19 preserves enable/low and rounds its interval to the new stepped range.
     FILE* version19File = std::fopen(configPath, "r"); assert(version19File);
     char version19Lines[35][512]{};
@@ -369,7 +439,7 @@ int main() {
         savedFpsDisplay = {}; dirty = false; loadConfig();
         assert(!savedEnvironment.enabled && !savedEnvironment.time && !savedEnvironment.fog
                && savedEnvironment.ticks == 6000 && savedEnvironment.value == 100);
-        assert(!savedCCUtils.enabled && !savedCCUtils.partyInvites);
+        assert(!savedCCUtils.enabled && !savedCCUtils.partyInvites && !savedCCUtils.playerPing);
         int expected = !std::strcmp(interval, "100") ? 250 : !std::strcmp(interval, "1100") ? 1000 : 2000;
         assert(savedFpsDisplay.enabled && savedFpsDisplay.low && savedFpsDisplay.intervalMs == expected
                && savedFpsDisplay.fontScale == 2 && savedFpsDisplay.anchor == 0 && dirty);
@@ -440,7 +510,7 @@ int main() {
     auto_gg_update(true, true);
     FILE* migrated = std::fopen(configPath, "r"); assert(migrated);
     char version[16]{};
-    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG22\n") == 0);
+    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG25\n") == 0);
     std::fclose(migrated);
     FILE* previous = std::fopen(configPath, "w"); assert(previous);
     std::fputs("AUTOGG5\n0\nVictory!\ngg\n0\n0\n30\n0\n120\n0\n60\n0\n1\n90\n", previous);
@@ -479,7 +549,7 @@ int main() {
     auto_gg_update(true, true);
     migrated = std::fopen(configPath, "r"); assert(migrated);
     std::memset(version, 0, sizeof(version));
-    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG22\n") == 0);
+    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG25\n") == 0);
     std::fclose(migrated);
     client_settings_set_tablist(false); saveConfig();
     savedTablist = true; loadConfig(); assert(!client_settings_get_tablist());
@@ -517,6 +587,10 @@ int main() {
     // Exercise the actual build-ID gate and read-only vtable patch on a sparse
     // anonymous image. A wrong ID or occupied slot must never be overwritten.
     unsigned long size = buildNote + 4096;
+    if (argc > 1 && std::strcmp(argv[1], "--settings") == 0) {
+        std::puts("PASS: chat behavior and settings persistence/migration (native hook fixture skipped)");
+        return 0;
+    }
     auto image = static_cast<unsigned char*>(mmap(nullptr, size, PROT_READ | PROT_WRITE,
                                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     assert(image != MAP_FAILED);
@@ -577,10 +651,20 @@ int main() {
         for (unsigned long address : {chat::lobbyDispatchFunctions[i], chat::lobbyBaseHandlers[i], chat::lobbyLegacyHandlers[i]})
             assert(mprotect(image + (address & ~(hooks::page_size() - 1)), hooks::page_size(), PROT_READ | PROT_EXEC) == 0);
     }
+    // Local diagnostic presentation is gated alongside the packet bridge.
+    assert(!installHook(base));
+    table[chat::clientUiOwnerSlot / 8] = base + chat::clientUiOwnerGetter;
+    for (const auto& gate : {std::pair<unsigned long, const unsigned char*>{chat::nativeDisplayChat, chat::nativeDisplayChatSignature},
+                             {chat::nativeDisplayChatCallSite, chat::nativeDisplayChatCallSiteSignature}}) {
+        unsigned long gateSize = gate.first == chat::nativeDisplayChat
+            ? sizeof(chat::nativeDisplayChatSignature) : sizeof(chat::nativeDisplayChatCallSiteSignature);
+        std::memcpy(image + gate.first, gate.second, gateSize);
+        assert(mprotect(image + (gate.first & ~(hooks::page_size() - 1)), hooks::page_size(), PROT_READ | PROT_EXEC) == 0);
+    }
     void* slotPage = image + (dispatcherSlot & ~(hooks::page_size() - 1));
     assert(mprotect(slotPage, hooks::page_size(), PROT_READ) == 0);
     assert(installHook(base) && *slot == dispatch);
     assert(!installHook(base)); // Do not chain/install twice.
     assert(munmap(image, size) == 0);
-    std::puts("PASS: shared chat listeners/filtering, party keyword matching, popup answers/deferred commands/world reset, AutoGG cooldown/settings/sender ABI/local echo, Lobby Scanner confirmation, and native build gate");
+    std::puts("PASS: shared chat listeners/filtering, party keyword matching, player ping/cooldown/cancellation, popup answers/deferred commands/world reset, AutoGG cooldown/settings/sender ABI/local echo, Lobby Scanner confirmation, and native build gate");
 }

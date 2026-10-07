@@ -24,7 +24,34 @@ static void nativeSubData(unsigned int target, long offset, long size, const voi
     assert(target == 0x8892 && offset == 17 && size == 256 && data == reinterpret_cast<void*>(42));
     ++forwards[3];
 }
-int main() {
+static int observedDraws, extensionForwards;
+static bool observeDraw() { ++observedDraws; return true; }
+static void nativeInstanced(unsigned int mode, int first, int count, int instances) {
+    assert(mode == 4 && first == 3 && (count == 9 || count == 0) && instances == 2);
+    ++extensionForwards;
+}
+static void nativeIndexed(unsigned int mode, int count, unsigned int type, const void* p, int instances) {
+    assert(mode == 4 && count == 9 && type == 0x1403 && p == reinterpret_cast<void*>(24) && instances == 2);
+    ++extensionForwards;
+}
+static void nativeIndirect(unsigned int mode, const void* p) {
+    assert(mode == 4 && p == reinterpret_cast<void*>(24)); ++extensionForwards;
+}
+static void nativeIndexedIndirect(unsigned int mode, unsigned int type, const void* p) {
+    assert(mode == 4 && type == 0x1403 && p == reinterpret_cast<void*>(24)); ++extensionForwards;
+}
+static Proc nativeLookup(const char* name) {
+    for (unsigned int i = 0; i < 8; ++i) if (sameName(name, extensionNames[i])) {
+        const unsigned long pointers[] = {reinterpret_cast<unsigned long>(nativeInstanced),
+            reinterpret_cast<unsigned long>(nativeInstanced), reinterpret_cast<unsigned long>(nativeIndexed),
+            reinterpret_cast<unsigned long>(nativeIndexed), reinterpret_cast<unsigned long>(nativeIndirect),
+            reinterpret_cast<unsigned long>(nativeIndirect), reinterpret_cast<unsigned long>(nativeIndexedIndirect),
+            reinterpret_cast<unsigned long>(nativeIndexedIndirect)};
+        return reinterpret_cast<Proc>(pointers[i]);
+    }
+    return sameName(name, "unknown") ? reinterpret_cast<Proc>(nativeIndirect) : nullptr;
+}
+int main(int argc, char**) {
     assert(hooks::initialize());
     unsigned long size = minecraft_build::current::buildNote + 4096;
     auto image = static_cast<unsigned char*>(mmap(nullptr, size, PROT_READ|PROT_WRITE,
@@ -42,6 +69,9 @@ int main() {
         std::memcpy(image + profile::plt[i], profile::pltSignatures[i], 6);
         *reinterpret_cast<unsigned long*>(image + profile::slots[i]) = functions[i];
     }
+    namespace drawProfile = minecraft_build::current::render::drawProc;
+    std::memcpy(image + drawProfile::plt, drawProfile::pltSignature, 6);
+    *reinterpret_cast<unsigned long*>(image + drawProfile::slot) = reinterpret_cast<unsigned long>(nativeLookup);
     assert(mprotect(image, size, PROT_READ|PROT_EXEC) == 0);
     render_gl_trace_configure(clockNow);
     auto mutate = [&](unsigned long offset, unsigned long value) {
@@ -58,6 +88,12 @@ int main() {
     mutate(profile::slots[0], base + profile::plt[0] + 6); assert(!render_gl_trace_install(base));
     mutate(profile::slots[0], replacements[0]); assert(!render_gl_trace_install(base));
     mutate(profile::slots[0], functions[0]);
+    if (argc > 1) { // Exercise service-first and trace-first in separate fresh processes.
+        assert(installSlots(base, 0, 2));
+        assert(!active && !drawObserver);
+        drawArrays(4,3,9); assert(forwards[0] == 1 && clockReads == 0);
+        forwards[0] = 0;
+    }
     assert(render_gl_trace_install(base));
     assert(!render_gl_trace_install(base));
     auto arrays = reinterpret_cast<DrawArrays>(*reinterpret_cast<unsigned long*>(image+profile::slots[0]));
@@ -80,5 +116,33 @@ int main() {
     render_gl_trace_disable(); // Retained/inactive hooks must always forward without timer work.
     arrays(4,3,9); assert(forwards[0] == 66 && clockReads == 10);
     assert(render_gl_trace_snapshot().operations[0].calls == 0);
-    puts("render GL import trace checks passed");
+    assert(installSlots(base, 0, 2)); // Reuses trace-owned draw hooks.
+    assert(installDrawProc(base));
+    assert(*reinterpret_cast<unsigned long*>(image + drawProfile::slot) == reinterpret_cast<unsigned long>(getDrawProc));
+    drawObserver = observeDraw;
+    arrays(4,3,9); elements(4,12,0x1403,reinterpret_cast<void*>(24));
+    assert(observedDraws == 2 && forwards[0] == 66 && forwards[1] == 1 && clockReads == 10);
+    procOriginal = reinterpret_cast<unsigned long>(nativeLookup);
+    assert(!getDrawProc("missing"));
+    assert(getDrawProc("unknown") == reinterpret_cast<Proc>(nativeIndirect));
+    for (unsigned int i = 0; i < 8; ++i) {
+        auto pointer = getDrawProc(extensionNames[i]);
+        assert(reinterpret_cast<unsigned long>(pointer) == extensionWrappers[i]);
+        drawObserver = nullptr;
+        if (i < 2) reinterpret_cast<ArraysInstanced>(pointer)(4,3,9,2);
+        else if (i < 4) reinterpret_cast<ElementsInstanced>(pointer)(4,9,0x1403,reinterpret_cast<void*>(24),2);
+        else if (i < 6) reinterpret_cast<ArraysIndirect>(pointer)(4,reinterpret_cast<void*>(24));
+        else reinterpret_cast<ElementsIndirect>(pointer)(4,0x1403,reinterpret_cast<void*>(24));
+        drawObserver = observeDraw;
+        if (i < 2) reinterpret_cast<ArraysInstanced>(pointer)(4,3,9,2);
+        else if (i < 4) reinterpret_cast<ElementsInstanced>(pointer)(4,9,0x1403,reinterpret_cast<void*>(24),2);
+        else if (i < 6) reinterpret_cast<ArraysIndirect>(pointer)(4,reinterpret_cast<void*>(24));
+        else reinterpret_cast<ElementsIndirect>(pointer)(4,0x1403,reinterpret_cast<void*>(24));
+    }
+    assert(extensionForwards == 8 && observedDraws == 10);
+    arraysInstanced<0>(4,3,0,2); assert(extensionForwards == 9 && observedDraws == 10);
+    extensionOriginals[0] = reinterpret_cast<unsigned long>(nativeIndexed);
+    assert(getDrawProc(extensionNames[0]) == reinterpret_cast<Proc>(nativeInstanced));
+    drawObserver = nullptr;
+    puts("render GL import trace and draw service checks passed");
 }

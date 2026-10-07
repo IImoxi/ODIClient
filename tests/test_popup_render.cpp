@@ -33,7 +33,7 @@ int main() {
     assert(context != EGL_NO_CONTEXT && surface != EGL_NO_SURFACE);
     assert(eglMakeCurrent(display, surface, surface, context));
     glViewport(0, 0, 960, 720);
-    assert(popup_show("Experimental", "Would you like to continue?"));
+    assert(popup_show("Confirmation", "Would you like to continue?"));
     clear(); popup_render(true, 1000000000LL);
     assert(red(720, 25) == 255); // First animation frame starts to the right of the screen.
     clear(); popup_render(true, 1100000000LL);
@@ -90,7 +90,7 @@ int main() {
     clear(); popup_render(true, 6600000000LL);
     assert(red(720, 25) == 255);
     // Completed response: only the answer moves vertically and grows for 500 ms.
-    assert(popup_show("Experimental", "Would you like to continue?"));
+    assert(popup_show("Confirmation", "Would you like to continue?"));
     clear(); popup_render(true, 7000000000LL);
     clear(); popup_render(true, 7500000000LL);
     popup_on_mouse_button(1, 0, true);
@@ -119,7 +119,7 @@ int main() {
     assert(red(720, 25) == 255); // Normal dismissal follows the one-second result sequence.
     assert(glGetError() == GL_NO_ERROR);
     // Wrapping adds one body line while leaving the bottom answer row in place.
-    assert(popup_show("Experimental", "Would you like to continue with this longer popup message?"));
+    assert(popup_show("Confirmation", "Would you like to continue with this longer popup message?"));
     clear(); popup_render(true, 11000000000LL);
     clear(); popup_render(true, 11500000000LL);
     assert(red(720, 95) < 150); // Extra height above the old 89px panel top.

@@ -129,53 +129,53 @@ for section in sections:
 assert found_imports == expected_imports
 print('PASS: Terrain preparation caller/argument ABI and GL diagnostic import symbols/PLT slots')
 
-# Both whole native fallback loops and their RIP-relative single-draw targets.
-gpu_profile = re.search(r'namespace gpuMultidraw \{(.*?)\n\}\n', profile, re.S)[1]
-def gpu_values(name):
-    return [int(value, 0) for value in re.findall(r'0x[0-9a-f]+|(?<![\w])\d+',
-        re.search(rf'{name}\[2\] = \{{(.*?)\}}', gpu_profile, re.S)[1])]
-gpu_signatures = [bytes(int(value, 16) for value in re.findall(r'0x[0-9a-f]+', body))
-    for body in re.findall(r'\{([^{}]+)\}',
-        re.search(r'fallbackSignatures\[2\]\[69\] = \{(.*?)\};', gpu_profile, re.S)[1])]
-for address, size, slot, signature, call_offset in zip(gpu_values('fallback'), gpu_values('fallbackSizes'),
-        gpu_values('singleSlots'), gpu_signatures, (0x26, 0x29)):
-    assert len(signature) == size and read(address, size) == signature
-    call = address + call_offset
-    assert read(call, 2) == b'\xff\x15'
-    assert call + 6 + struct.unpack('<i', read(call+2, 4))[0] == slot
-# Verified renderer callers pass a 32-byte stride into the fallback dispatch slots.
-for address, signature in (('gpuArraysCaller', 'gpuArraysCallerSignature'),
-                           ('gpuElementsCaller', 'gpuElementsCallerSignature'),
-                           ('gpuFallbackSetup', 'gpuFallbackSetupSignature')):
-    assert read(integer(address), len(array(signature))) == array(signature)
-print('PASS: GPU multidraw native loops, indirect targets, stride-32 callers and fallback initialization')
-
-# Shader-uniform imports used by the native decoder and lifecycle invalidation.
-uniform_profile = re.search(r'namespace uniformCache \{(.*?)\n\}\n', profile, re.S)[1]
-def uniform_addresses(name):
+# Shader program lifecycle imports used by the sky service.
+program_profile = re.search(r'namespace shaderPrograms \{(.*?)\n\}\n', profile, re.S)[1]
+def program_addresses(name):
     return [int(value, 16) for value in re.findall(r'0x[0-9a-f]+',
-        re.search(rf'{name}\[9\] = \{{(.*?)\}}', uniform_profile)[1])]
-uniform_signatures = [bytes(int(value, 16) for value in re.findall(r'0x[0-9a-f]+', body))
+        re.search(rf'{name}\[3\] = \{{(.*?)\}}', program_profile)[1])]
+program_signatures = [bytes(int(value, 16) for value in re.findall(r'0x[0-9a-f]+', body))
     for body in re.findall(r'\{([^{}]+)\}',
-        re.search(r'pltSignatures\[9\]\[6\] = \{(.*?)\};', uniform_profile, re.S)[1])]
-for slot, plt, signature in zip(uniform_addresses('slots'), uniform_addresses('plt'), uniform_signatures):
+        re.search(r'pltSignatures\[3\]\[6\] = \{(.*?)\};', program_profile, re.S)[1])]
+for slot, plt, signature in zip(program_addresses('slots'), program_addresses('plt'), program_signatures):
     assert read(plt, 6) == signature and plt+6+struct.unpack('<i', signature[2:])[0] == slot
-uniform_imports = dict(zip(uniform_addresses('slots'), ('glUniformMatrix4fv', 'glLinkProgram', 'glDeleteProgram',
-    'glUniform4fv', 'glUniformMatrix3fv', 'glUniform1i', 'glUseProgram', 'glUniform1iv', 'eglMakeCurrent')))
+program_imports = dict(zip(program_addresses('slots'), ('glLinkProgram', 'glDeleteProgram', 'glUseProgram')))
 for section in sections:
     if section[1] != 4: continue
     symbols = sections[section[6]]; strings = sections[symbols[6]]
     for offset in range(section[4], section[4]+section[5], 24):
         address, info, _ = struct.unpack_from('<QQq', image, offset)
-        if address not in uniform_imports: continue
+        if address not in program_imports: continue
         assert info & 0xffffffff == 7
         symbol = symbols[4]+(info >> 32)*symbols[9]
         name_offset = struct.unpack_from('<I', image, symbol)[0]+strings[4]
-        assert image[name_offset:image.find(b'\0', name_offset)].decode() == uniform_imports.pop(address)
-assert not uniform_imports
-for name in ('uniformVecDecoder', 'uniformMatrixDecoder'):
-    assert read(integer(name), len(array(name+'Signature'))) == array(name+'Signature')
-print('PASS: Uniform cache import symbols, PLT gates, decoder calls and program lifecycle imports')
+        assert image[name_offset:image.find(b'\0', name_offset)].decode() == program_imports.pop(address)
+assert not program_imports
+print('PASS: Shader program import symbols, PLT gates and lifecycle imports')
+
+# Sky source/compile and instanced/indirect draw lookup use their own gated imports.
+sky_imports = {}
+for namespace, symbol in (('shaderSource', 'glShaderSource'), ('shaderCompile', 'glCompileShader'),
+                          ('drawProc', 'eglGetProcAddress')):
+    scope = re.search(r'namespace ' + namespace + r' \{(.*?)\n\}', profile, re.S)[1]
+    slot = int(re.search(r' slot = (0x[0-9a-f]+);', scope)[1], 16)
+    plt = int(re.search(r' plt = (0x[0-9a-f]+);', scope)[1], 16)
+    signature = bytes(int(value, 16) for value in re.findall(r'0x[0-9a-f]+',
+        re.search(r'pltSignature\[\] = \{(.*?)\}', scope)[1]))
+    assert read(plt, len(signature)) == signature
+    assert plt + 6 + struct.unpack('<i', signature[2:])[0] == slot
+    sky_imports[slot] = symbol
+for section in sections:
+    if section[1] != 4: continue
+    symbols = sections[section[6]]; strings = sections[symbols[6]]
+    for offset in range(section[4], section[4]+section[5], 24):
+        address, info, _ = struct.unpack_from('<QQq', image, offset)
+        if address not in sky_imports: continue
+        assert info & 0xffffffff == 7
+        name_offset = struct.unpack_from('<I', image, symbols[4]+(info >> 32)*symbols[9])[0]+strings[4]
+        assert image[name_offset:image.find(b'\0', name_offset)].decode() == sky_imports.pop(address)
+assert not sky_imports
+print('PASS: Sky shader source/compile and EGL draw-procedure import gates')
 
 # Native GL submission entry/ABI and presentation import.
 assert relocations[integer('submitSlot')] == integer('submitFunction')
@@ -247,3 +247,15 @@ assert relocations[addresses('fogTables')[0] + integer('angleSlot')] == integer(
 for name in ('fogOverworld', 'fogPassthrough', 'angleEntry', 'fogCaller', 'angleCaller'):
     assert read(integer(name + 'Site'), len(array(name + 'Signature'))) == array(name + 'Signature')
 print('PASS: Environment Dimension slots, color return ABI, celestial-angle ticks, and native callers')
+
+# Read-only player targeting uses native camera unprojection and Level iteration.
+for name in ('cameraGetter', 'matrixMultiply', 'matrixInverse', 'forEachPlayer',
+             'playerIteration', 'playerIterationCall', 'shapeRead', 'cameraPickRead',
+             'cameraMatrices', 'playerNameRead'):
+    assert read(integer(name), len(array(name + 'Signature'))) == array(name + 'Signature')
+assert relocations[integer('clientLevelTable') + integer('forEachPlayerSlot')] == integer('forEachPlayer')
+info = relocations[integer('clientLevelTable') - 8]
+assert read(relocations[info + 8], 14) == b'11ClientLevel\0'
+assert read(integer('playerNameRead'), 7) == bytes.fromhex('f680') + struct.pack('<I', integer('actorName')) + b'\x01'
+assert read(integer('shapeRead'), 7) == bytes.fromhex('488b87') + struct.pack('<I', integer('actorShape'))
+print('PASS: Player targeting camera/matrix ABI, Level player iteration, Actor AABB and name reads')

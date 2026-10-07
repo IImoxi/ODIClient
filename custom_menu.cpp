@@ -8,6 +8,7 @@
 #include "custom_font.h"
 #include "fps_limiter.h"
 
+
 namespace {
 constexpr int keyL = 76;
 constexpr int keyEscape = 27;
@@ -58,6 +59,7 @@ struct PageItem {
     void (*onToggle)(bool);
     void (*onSlider)(int);
     bool multiline;
+    bool commaBubbles;
     bool expanded;
     char value[256];
 };
@@ -225,6 +227,7 @@ void updateSettingsTransition(long long now) {
     }
 }
 int focusedTextBox = -1;
+int textCursor = 0;
 int draggingSlider = -1;
 bool leftShiftHeld;
 bool rightShiftHeld;
@@ -614,6 +617,9 @@ bool handleMouseButton(double x, double y, int button, int action, MenuAction& p
             if (!contains(x, y, left, top, width, height)) continue;
             if (item.type == pageTextBox) {
                 focusedTextBox = static_cast<int>(i);
+                textCursor = 0;
+                const volatile char* initialChars = item.value;
+                while (initialChars[textCursor]) ++textCursor;
                 caretStartNs = fps_limiter_frame_timestamp_ns();
             }
             else if (item.type == pageButton) pending.click = item.onClick;
@@ -877,11 +883,12 @@ MenuPage& MenuPage::whenEnabled(bool (*isVisible)()) {
 }
 
 MenuPage& MenuPage::textBox(const char* label, const char* initialValue,
-                              void (*onChange)(const char*), bool multiline) {
+                              void (*onChange)(const char*), bool multiline, bool commaBubbles) {
     if (PageItem* control = appendPageItem(index, pageTextBox, label)) {
         PageItem& item = *control;
         item.onChange = onChange;
         item.multiline = multiline;
+        item.commaBubbles = commaBubbles;
         if (initialValue) {
             int i = 0;
             while (initialValue[i] && i < static_cast<int>(sizeof(item.value)) - 1) {
@@ -954,16 +961,28 @@ bool handleTextBoxKeyboard(int key, int action, MenuAction& pending) {
     const volatile char* valueChars = value;
     int length = 0;
     while (valueChars[length]) ++length;
+    if (textCursor > length) textCursor = length;
     bool changed = false;
     if (key == 8 || key == 259) {
-        if (length) {
-            do { --length; } while (length && (static_cast<unsigned char>(value[length]) & 0xc0) == 0x80);
-            value[length] = 0; changed = true;
+        if (textCursor) {
+            int previous = textCursor - 1;
+            while (previous && (static_cast<unsigned char>(value[previous]) & 0xc0) == 0x80) --previous;
+            for (int i = previous; i <= length - (textCursor - previous); ++i)
+                value[i] = value[i + textCursor - previous];
+            textCursor = previous; changed = true;
+        }
+    } else if (key == 37 || key == 263) {
+        if (textCursor) do { --textCursor; } while (textCursor && (static_cast<unsigned char>(value[textCursor]) & 0xc0) == 0x80);
+    } else if (key == 39 || key == 262) {
+        if (textCursor < length) {
+            ++textCursor;
+            while (textCursor < length && (static_cast<unsigned char>(value[textCursor]) & 0xc0) == 0x80) ++textCursor;
         }
     } else if (key == 13 || key == 257) {
         if (item.multiline && (leftShiftHeld || rightShiftHeld)) {
             if (length < static_cast<int>(sizeof(item.value)) - 1) {
-                value[length] = '\n'; value[length + 1] = 0; changed = true;
+                for (int i = length + 1; i > textCursor; --i) value[i] = value[i - 1];
+                value[textCursor++] = '\n'; changed = true;
             }
         } else focusedTextBox = -1;
     } else if (length < static_cast<int>(sizeof(item.value)) - 1) {
@@ -994,7 +1013,10 @@ bool handleTextBoxKeyboard(int key, int action, MenuAction& pending) {
                 default: if (key >= 96 && key <= 105) character = '0' + key - 96;
             }
         }
-        if (character) { value[length] = character; value[length + 1] = 0; changed = true; }
+        if (character) {
+            for (int i = length + 1; i > textCursor; --i) value[i] = value[i - 1];
+            value[textCursor++] = character; changed = true;
+        }
     }
     if (changed) caretStartNs = fps_limiter_frame_timestamp_ns();
     if (changed && item.onChange) {
@@ -1173,6 +1195,7 @@ struct MenuFrame {
     int requestedControlView = 0;
     ControlLayout controls;
     int focused = -1;
+    int textCursor = 0;
     bool caretVisible = false;
     double cursorX = 0.0, cursorY = 0.0;
     bool cursorValid = false;
@@ -1347,7 +1370,7 @@ void drawHeader(const char* pageTitle, int screenWidth, int screenHeight) {
     if (progress >= 1.0f) titleMotion.offset = target;
     int left = panelX + panelWidth / 2 - baseWidth / 2
         + static_cast<int>(titleMotion.offset * panelWidth);
-    int textTop = top + panelHeight * 5 / 100 + (panelHeight * 7 / 100 - fontHeight) / 2;
+    int textTop = top + panelHeight * 5 / 100 + (panelHeight * 7 / 100 - fontHeight) / 2 - fontHeight / 2;
     custom_font_draw_left("ODIClient", left, textTop, fontHeight, screenWidth, screenHeight);
     if (pageTitle) {
         custom_font_set_opacity(menuOpacity * progress);
@@ -1605,10 +1628,15 @@ void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight,
             custom_font_draw_left_scaled(item.label, x, top, pageFontHeight(2),
                                          pageTextScale, screenWidth, screenHeight);
             textFieldRect(i, screenHeight, x, top, width, height);
-            float radius = panelHeight * 1.5f / 100.0f;
-            drawSurface(x, top, width, height, screenHeight, menu_style::control, radius, 0.0f, menu_style::textBoxTint);
-            if (frame.focused == i)
-                drawSurface(x, top, width, height, screenHeight, menu_style::focus, radius, 1.0f);
+            float radius = panelHeight * menu_style::textBoxRadiusPercent / 100.0f;
+            drawSurface(x, top, width, height, screenHeight, menu_style::textBoxBackground,
+                        radius, 0.0f, 1.0f, 0.0f, menu_style::textBoxBackgroundOpacity);
+            float outlineOpacity = frame.focused == i ? menu_style::textBoxFocusedOutlineOpacity
+                                                       : menu_style::textBoxOutlineOpacity;
+            if (menu_style::textBoxOutlineThickness > 0.0f && outlineOpacity > 0.0f)
+                drawSurface(x, top, width, height, screenHeight,
+                            frame.focused == i ? menu_style::textBoxFocusedOutline : menu_style::textBoxOutline,
+                            radius, menu_style::textBoxOutlineThickness, 1.0f, 0.0f, outlineOpacity);
             int textX = x + width * 3 / 100, textWidth = width * 94 / 100;
             int lineHeight = panelHeight * menu_style::textLineHeightPercent / 100;
             int visibleLines = item.multiline ? frame.controls.lineSlots[i] : 1;
@@ -1624,17 +1652,72 @@ void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight,
                 value[length] = 0;
                 bool last = !*text;
                 const char* shown = value;
-                if (frame.focused == i) while (*shown && custom_font_text_width(shown, fontHeight) * pageTextScale > textWidth - 3) {
+                int lineStart = static_cast<int>(text - item.value) - length;
+                int lineCursor = frame.focused == i ? frame.textCursor - lineStart : length;
+                if (lineCursor < 0) lineCursor = 0;
+                if (lineCursor > length) lineCursor = length;
+                if (frame.focused == i && !item.commaBubbles) while (*shown && custom_font_text_width(shown, fontHeight) * pageTextScale > textWidth - 3) {
                     ++shown;
                     while ((static_cast<unsigned char>(*shown) & 0xc0) == 0x80) ++shown;
                 }
                 int displayHeight = static_cast<int>(fontHeight * pageTextScale + 0.5f);
                 int textBlockHeight = displayHeight + (visibleLines - 1) * lineHeight;
                 int lineTop = top + (height - textBlockHeight) / 2 + line * lineHeight;
-                drawLabel(shown, textX, lineTop, textWidth, displayHeight,
-                          fontHeight, screenWidth, screenHeight, false);
-                if (last && frame.focused == i) {
-                    int caretX = static_cast<int>(custom_font_text_width(shown, fontHeight) * pageTextScale + 1);
+                int caretX = 1;
+                if (item.commaBubbles) {
+                    int segmentStart = 0, position = 0;
+                    while (segmentStart < length) {
+                        if (position >= textWidth) break;
+                        int end = segmentStart;
+                        while (end < length && value[end] != ',') ++end;
+                        char segment[256];
+                        int count = end - segmentStart;
+                        for (int j = 0; j < count; ++j) segment[j] = value[segmentStart + j];
+                        segment[count] = 0;
+                        int segmentWidth = static_cast<int>(custom_font_text_width(segment, fontHeight) * pageTextScale + 0.5f);
+                        bool complete = end < length;
+                        int padding = complete ? static_cast<int>(displayHeight
+                            * menu_style::textBubbleHorizontalPaddingPercent / 100.0f + 0.5f) : 0;
+                        int bubbleWidth = segmentWidth + padding * 2;
+                        if (complete) {
+                            int verticalPadding = static_cast<int>(displayHeight
+                                * menu_style::textBubbleVerticalPaddingPercent / 100.0f + 0.5f);
+                            int bubbleHeight = displayHeight + verticalPadding * 2;
+                            float bubbleRadius = bubbleHeight * menu_style::textBubbleRadiusPercent / 100.0f;
+                            drawSurface(textX + position, lineTop - verticalPadding,
+                                        bubbleWidth, bubbleHeight, screenHeight,
+                                        menu_style::textBubbleBackground, bubbleRadius, 0.0f, 1.0f, 0.0f,
+                                        menu_style::textBubbleBackgroundOpacity);
+                            if (menu_style::textBubbleOutlineThickness > 0.0f && menu_style::textBubbleOutlineOpacity > 0.0f)
+                                drawSurface(textX + position, lineTop - verticalPadding,
+                                            bubbleWidth, bubbleHeight, screenHeight,
+                                            menu_style::textBubbleOutline, bubbleRadius,
+                                            menu_style::textBubbleOutlineThickness, 1.0f, 0.0f,
+                                            menu_style::textBubbleOutlineOpacity);
+                        }
+                        if (position + padding < textWidth)
+                            drawLabel(segment, textX + position + padding, lineTop,
+                                      textWidth - position - padding, displayHeight,
+                                      fontHeight, screenWidth, screenHeight, false);
+                        if (lineCursor >= segmentStart && lineCursor <= end) {
+                            segment[lineCursor - segmentStart] = 0;
+                            caretX = position + padding + static_cast<int>(custom_font_text_width(segment, fontHeight) * pageTextScale) + 1;
+                        }
+                        position += bubbleWidth + (complete ? displayHeight / 3 : 0);
+                        segmentStart = end + 1;
+                    }
+                    if (lineCursor == length && length && value[length - 1] == ',') caretX = position + 1;
+                } else {
+                    drawLabel(shown, textX, lineTop, textWidth, displayHeight,
+                              fontHeight, screenWidth, screenHeight, false);
+                    int shownStart = static_cast<int>(shown - value);
+                    int visibleCursor = lineCursor > shownStart ? lineCursor - shownStart : 0;
+                    char prefix[256];
+                    for (int j = 0; j < visibleCursor; ++j) prefix[j] = shown[j];
+                    prefix[visibleCursor] = 0;
+                    caretX = static_cast<int>(custom_font_text_width(prefix, fontHeight) * pageTextScale + 1);
+                }
+                if (frame.focused == i && frame.textCursor >= lineStart && frame.textCursor <= lineStart + length) {
                     int caretY = lineTop - top;
                     caretPosition(frame.pageIndex, i, displayHeight, textWidth, caretX, caretY);
                     int caretWidth = panelHeight / 400;
@@ -1684,6 +1767,7 @@ void custom_menu_render() {
         frame.pageIndex = frame.transition.active && frame.transition.exitPage >= 0
             ? frame.transition.exitPage : activePage;
         frame.focused = focusedTextBox;
+        frame.textCursor = textCursor;
         frame.caretVisible = (fps_limiter_frame_timestamp_ns() - caretStartNs) / 500000000LL % 2 == 0;
         frame.cursorX = cursorX;
         frame.cursorY = cursorY;

@@ -1,7 +1,5 @@
 #include "render.h"
 #include "render_frame_trace.h"
-#include "gpu_multidraw.h"
-#include "gpu_uniform_cache.h"
 #include "render_gl_trace.h"
 #include "client_modules.h"
 #include "client_settings.h"
@@ -66,13 +64,17 @@ void initTrace(unsigned long base) {
     traceFd = openFile(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0600);
     traceStart = traceNow();
     if (traceFd < 0 || !traceStart) return;
-    constexpr char header[] = "# ODIClient terrain trace v6; new session; CPU/API times, not GPU execution times\n"
+    constexpr char header[] = "# ODIClient terrain trace v8; new session; CPU/API times, not GPU execution times\n"
         "monotonic_ns,window_ms,callbacks,callback_total_ms,callback_max_ms,frames,frame_avg_ms,frame_max_ms,render_options,"
         "sections_produced,sections_kept,prepare_calls,prepare_wall_total_ms,prepare_wall_max_ms,prepare_thread_cpu_ms,"
         "draw_arrays_calls,draw_arrays_vertices,draw_arrays_samples,draw_arrays_sample_total_ms,draw_arrays_sample_max_ms,"
         "draw_elements_calls,draw_elements_indices,draw_elements_samples,draw_elements_sample_total_ms,draw_elements_sample_max_ms,"
         "buffer_data_calls,buffer_data_requested_bytes,buffer_data_samples,buffer_data_sample_total_ms,buffer_data_sample_max_ms,"
         "buffer_sub_data_calls,buffer_sub_data_requested_bytes,buffer_sub_data_samples,buffer_sub_data_sample_total_ms,buffer_sub_data_sample_max_ms,"
+        "draw_arrays_instanced_calls,draw_arrays_instanced_vertices,draw_arrays_instanced_samples,draw_arrays_instanced_sample_total_ms,draw_arrays_instanced_sample_max_ms,"
+        "draw_elements_instanced_calls,draw_elements_instanced_indices,draw_elements_instanced_samples,draw_elements_instanced_sample_total_ms,draw_elements_instanced_sample_max_ms,"
+        "draw_arrays_indirect_calls,draw_arrays_indirect_unknown_units,draw_arrays_indirect_samples,draw_arrays_indirect_sample_total_ms,draw_arrays_indirect_sample_max_ms,"
+        "draw_elements_indirect_calls,draw_elements_indirect_unknown_units,draw_elements_indirect_samples,draw_elements_indirect_sample_total_ms,draw_elements_indirect_sample_max_ms,"
         "gpu_multidraw_enabled,gpu_multidraw_available,gpu_array_batches,gpu_element_batches,gpu_commands,gpu_avoided_calls,gpu_fallback_batches,gpu_status,"
         "uniform_cache_enabled,uniform_cache_available,uniform_calls,uniform_skipped_calls,uniform_skipped_bytes,uniform_status,uniform_eligible_calls,uniform_owner_rejected_calls,uniform_uncacheable_calls,"
         "outside_callback_calls,outside_callback_wall_total_ms,outside_callback_wall_max_ms,outside_callback_thread_cpu_ms,"
@@ -80,7 +82,9 @@ void initTrace(unsigned long base) {
         "limiter_calls,limiter_wall_total_ms,limiter_wall_max_ms,limiter_thread_cpu_ms,"
         "overlays_calls,overlays_wall_total_ms,overlays_wall_max_ms,overlays_thread_cpu_ms,"
         "native_submit_calls,native_submit_wall_total_ms,native_submit_wall_max_ms,native_submit_thread_cpu_ms,"
-        "present_calls,present_wall_total_ms,present_wall_max_ms,present_thread_cpu_ms,frame_gap_resets\n";
+        "present_calls,present_wall_total_ms,present_wall_max_ms,present_thread_cpu_ms,frame_gap_resets,"
+        "reuse_vertex_enabled,reuse_index_enabled,nonblocking_occlusion_enabled,hide_weather_enabled,reduce_particles_enabled,particle_density,hide_emitters_enabled,"
+        "vertex_buffer_reuses,index_buffer_reuses,occlusion_queries_checked,occlusion_queries_deferred,weather_calls_skipped,particle_requests,particles_skipped,emitters_skipped\n";
     if (traceWrite(traceFd, header, sizeof(header)-1) != sizeof(header)-1) return;
     render_gl_trace_configure(traceNow);
     bool gl = render_gl_trace_install(base);
@@ -88,13 +92,12 @@ void initTrace(unsigned long base) {
     render_frame_trace_configure(traceNow,traceThreadNow);
     auto frame = render_frame_trace_install(base);
     char status[256];
-    int size = traceFormat(status, sizeof(status), "# prepare_hook=%u gl_import_hooks=%u gl_timing_sample_stride=64 frame_submit_hook=%u egl_present_hook=%u; nested timings overlap\n", unsigned(prepare), unsigned(gl), unsigned(frame.submit), unsigned(frame.present));
+    int size = traceFormat(status, sizeof(status), "# prepare_hook=%u gl_draw_and_buffer_hooks=%u gl_timing_sample_stride=64 frame_submit_hook=%u egl_present_hook=%u; nested timings overlap\n", unsigned(prepare), unsigned(gl), unsigned(frame.submit), unsigned(frame.present));
     if (size <= 0 || size >= int(sizeof(status)) || traceWrite(traceFd, status, size) != size) {
         render_gl_trace_disable();
         render_frame_trace_disable();
         return;
     }
-    gpu_uniform_cache_trace_enable(true);
     __atomic_store_n(&tracing, true, __ATOMIC_RELEASE);
 }
 // One atomic snapshot per callback, including all distances.
@@ -350,20 +353,10 @@ void render_trace_frame(long long frameDeltaNs) {
         if (added <= 0 || added >= int(sizeof(line))-size) { size = 0; break; }
         size += added;
     }
-    auto gpu = gpu_multidraw_snapshot();
+    // Preserve historical CSV columns without retaining failed experiments.
     if (size > 0 && size < int(sizeof(line))) {
-        int added = traceFormat(line+size, sizeof(line)-size, ",%u,%u,%llu,%llu,%llu,%llu,%llu,%s",
-            unsigned(client_gpu_multidraw_enabled()), unsigned(gpu_multidraw_available()),
-            gpu.array_batches, gpu.element_batches, gpu.commands, gpu.avoided_calls, gpu.fallback_batches, gpu_multidraw_status());
-        if (added <= 0 || added >= int(sizeof(line))-size) size = 0;
-        else size += added;
-    }
-    auto uniform = gpu_uniform_cache_snapshot();
-    if (size > 0 && size < int(sizeof(line))) {
-        int added = traceFormat(line+size, sizeof(line)-size, ",%u,%u,%llu,%llu,%llu,%s,%llu,%llu,%llu",
-            unsigned(client_uniform_cache_enabled()), unsigned(gpu_uniform_cache_available()),
-            uniform.calls, uniform.skipped, uniform.skipped_bytes, gpu_uniform_cache_status(),
-            uniform.eligible, uniform.owner_rejected, uniform.uncacheable);
+        int added = traceFormat(line+size, sizeof(line)-size,
+            ",0,0,0,0,0,0,0,retired,0,0,0,0,0,retired,0,0,0");
         if (added <= 0 || added >= int(sizeof(line))-size) size = 0;
         else size += added;
     }
@@ -380,11 +373,16 @@ void render_trace_frame(long long frameDeltaNs) {
         if (added <= 0 || added >= int(sizeof(line))-size) size = 0;
         else size += added;
     }
+    if (size > 0 && size < int(sizeof(line))) {
+        int added = traceFormat(line+size, sizeof(line)-size, ",%u,%u,%u,%u,%u,%d,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu",
+            0u, 0u, 0u, 0u, 0u, 0, 0u, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull);
+        if (added <= 0 || added >= int(sizeof(line))-size) size = 0;
+        else size += added;
+    }
     if (size > 0 && size < int(sizeof(line))-1) line[size++] = '\n';
     else size = 0;
     if (!size || traceWrite(traceFd, line, size) != size) {
         render_frame_trace_disable();
-        gpu_uniform_cache_trace_enable(false);
         __atomic_store_n(&tracing, false, __ATOMIC_RELEASE);
         render_gl_trace_disable();
     }

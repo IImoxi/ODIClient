@@ -45,7 +45,7 @@ LobbyWatchSettings client_settings_get_lobby_watch();
 void client_settings_set_lobby_watch(const LobbyWatchSettings& settings);
 
 struct CCUtilsSettings {
-    bool enabled = false, partyInvites = false;
+    bool enabled = false, partyInvites = false, playerPing = false;
 };
 CCUtilsSettings client_settings_get_cc_utils();
 void client_settings_set_cc_utils(CCUtilsSettings settings);
@@ -65,6 +65,9 @@ void client_settings_set_fps_display(FpsDisplaySettings settings);
 struct EnvironmentSettings {
     bool enabled = false, time = false, fog = false;
     int ticks = 6000, hue = 0, saturation = 0, value = 100;
+    bool sky = false, clouds = true, vanillaCelestials = false; // clouds: legacy config slot, ignored by renderer.
+    // Legacy config slots: preserved for compatibility, renderer always optimizes.
+    bool skyLookup = false, skyHalfResolution = false, skyReducedSamples = false;
 };
 EnvironmentSettings client_settings_get_environment();
 void client_settings_set_environment(EnvironmentSettings settings);

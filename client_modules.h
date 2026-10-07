@@ -64,9 +64,9 @@ void client_set_cc_utils(bool value);
 bool client_cc_utils_enabled();
 void client_set_party_invites(bool value);
 bool client_party_invites_enabled();
+void client_set_player_ping(bool value);
+bool client_player_ping_enabled();
 
-void client_set_experimental(bool value);
-bool client_experimental_enabled();
 
 void client_set_render_horizontal(bool value);
 bool client_render_horizontal();
@@ -87,6 +87,10 @@ int client_fps_anchor();
 
 void client_set_environment(bool value);
 bool client_environment_enabled();
+void client_set_environment_sky(bool value);
+bool client_environment_sky();
+void client_set_environment_vanilla_celestials(bool value);
+bool client_environment_vanilla_celestials();
 void client_set_environment_time(bool value);
 bool client_environment_time();
 void client_set_environment_fog(bool value);

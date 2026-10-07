@@ -53,6 +53,25 @@ bool sendCtrl(bool down) {
 
 const char* autosprint_error() { return error; }
 bool autosprint_has_focus() { return hasFocus; }
+bool autosprint_shift_down() {
+    if (!hasFocus) return false;
+    if (sdlBackend) {
+        auto target = __atomic_load_n(&sdlWindow, __ATOMIC_ACQUIRE);
+        if (!target || sdlFocus() != target) return false;
+        int count = 0;
+        const bool* keys = sdlKeys(&count);
+        return keys && count > 229 && (keys[225] || keys[229]);
+    }
+    if (!queryKeys || !getFocus) return false;
+    Window focused;
+    int revert;
+    getFocus(display, &focused, &revert);
+    if (focused != __atomic_load_n(&gameWindow, __ATOMIC_ACQUIRE)) return false;
+    char keys[32];
+    return queryKeys(display, keys)
+        && ((keys[leftShift / 8] & (1 << (leftShift % 8)))
+            || (keys[rightShift / 8] & (1 << (rightShift % 8))));
+}
 
 void autosprint_release_movement_keys() {
     if (sdlBackend) {

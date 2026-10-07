@@ -287,7 +287,7 @@ int main() {
     assert(std::strstr(logLine, ",6,6,1,3.000000,3.000000,1.000000,"));
     int columns = 1;
     for (const char* p=logLine; *p; ++p) if (*p==',') ++columns;
-    assert(columns==77);
+    assert(columns==112);
     tracing = false;
     int previousReads = clockReads;
     Fixture untraced;

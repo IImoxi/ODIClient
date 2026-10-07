@@ -11,11 +11,8 @@ instructions. Keep this map current when architecture, files, or commands change
 
 ## Current behavior and platform
 
-- **Experimental** defaults OFF for each launch and observes the default T chat
-  binding. Type `test` and send it, or use Show test popup on its settings page,
-  to open a bottom-right yes/no popup. The shared `popup.h` API is independent
-  of the module, accepts copied title/message and an optional answer callback,
-  and supports one pending prompt. Hold left click for one second for Yes or
+- The shared `popup.h` API accepts copied title/message and an optional answer
+  callback, and supports one pending prompt. Hold left click for one second for Yes or
   right click for one second for No; both show the skin-download progress ring.
   All input passes through. Early release, conflicting buttons, or focus loss
   cancel holds. Notifications draw above the menu and remain across game GUIs.
@@ -30,8 +27,7 @@ instructions. Keep this map current when architecture, files, or commands change
   The timer starts on the first frame and continues across focus loss/menus.
   Completed answers hide all other content; only Yes or No moves to the dialog
   center and scales to title size over 500 ms using the title-size atlas, holds
-  for another 500 ms, then dismisses. The keyboard test trigger does not
-  support pasted chat or remapped chat bindings.
+  for another 500 ms, then dismisses.
 
 - **Tablist** defaults ON; hold Tab (launcher key 9) for a passive player roster
   with a quarter-resolution background blur refreshed at most 30 Hz,
@@ -74,11 +70,35 @@ instructions. Keep this map current when architecture, files, or commands change
   calculation without changing world/server time. Fog overrides the native Dimension
   fog RGB in Overworld, Nether and End using Hue 0–360, Saturation/Value 0–100
   (defaults 0/0/100), preserving native alpha. Child sliders appear only when
-  their toggle and the module are enabled. Exact-build Dimension vtable hooks
-  use the shared manager and pass through when disabled or unsupported.
-  Appearance requires in-game verification.
-- **Uniform reuse v2 trial** is an independent Render-page switch, OFF each launch. It skips identical small native vector/integer shader-uniform imports within a program interval on the observed frame context/thread, with frame/program/lifecycle/toggle/array invalidation. It assumes verified imports observe all native writes; other code bypassing these imports can cause visual artifacts. v6 trace counts intercepted and skipped uploads. No terrain-distance or shader-math changes.
-- **GPU multi-draw trial** is an independent Render-page switch, OFF each launch. It replaces verified native CPU indirect-draw fallback loops with one GLES EXT multi-draw call for eligible batches of at least four commands. Unsupported drivers/contexts, stride-zero commands, missing buffer/VAO state and active transform feedback retain native behavior. It may be unused by the active renderer; v6 trace records status, substituted batches and avoided calls. No CUDA/tensor cores or new meshing path.
+  their toggle and the module are enabled. Physically inspired sky is a saved
+  default-OFF control. Verified shader/program/draw services replace a matched,
+  linked native Sky draw with one full-screen triangle using the native camera
+  matrix. Its own single-scattering atmosphere, sun, moon and stars replace the native celestial draws only after a replacement in the same
+  frame/context. Native mesh colors and clear color are untouched. The sky
+  forwards native sun/moon draws when the saved Vanilla sun/moon child
+  toggle is ON (default OFF); procedural disks/glow then disappear. The custom sun has a soft angular glow. Clouds are removed; the old saved cloud slot remains for config compatibility. Sky controls share a group without intervening text.
+  Sky always uses a 256×256 RGBA16F GPU atmosphere lookup, half-resolution
+  atmosphere, and 6×3 integration samples (formerly 8×4). There are no quality
+  toggles; legacy saved flags are ignored by the renderer. Detailed celestial
+  effects stay full resolution. Lookup refreshes after angle changes over
+  1/4096 of a day or sample changes; unsupported texture paths retain direct
+  rendering with reduced samples. Resources are bounded to four contexts per
+  thread and remain owned by those GL contexts. The shader skips invisible
+  star work and stops sunlight integration for shadowed samples; no cloud
+  noise or clock reads remain.
+  Disabling the sky
+  restores the original shader path. Both standard and instanced layouts are
+  supported. Environment distinguishes matched source, compilation, linked
+  program and an observed replacement draw. Missing/invalid camera matrices or
+  unsupported paths forward native draws. GLES pixel tests cover both layouts,
+  rotation, infinite-far projection, constant native colors, foreground depth and
+  GL state restoration. In-game routing, camera/sun alignment and performance
+  still need verification. Exact-build Dimension hooks preserve time/fog behavior.
+- Failed buffer-reuse, occlusion, weather/particle suppression, uniform-reuse,
+  and multi-draw implementations and their tests/native profiles are removed.
+  Historical trace columns remain zero-filled for CSV compatibility.
+  `gpu_shader_services` owns only shader-source/compile and link/delete/use-program
+  hooks used by Environment; uniform/EGL cache hooks and cache frame work are absent.
 - **Render** provides experimental below/above-camera terrain limits, all OFF by
   default. An optional horizontal terrain radius also defaults OFF at 128 blocks.
   Distances are 16–256 blocks (defaults 64 below, 128 above), persisted
@@ -92,11 +112,12 @@ instructions. Keep this map current when architecture, files, or commands change
   in-game verification.
   Terrain diagnostics are opt-in through `ODI_TERRAIN_TRACE=/absolute/path.csv`.
   The existing Render hook counts sections and aggregates callback wall time even
-  with the module OFF. Optional exact-build preparation-call and four GL import
-  hooks add broader wall/calling-thread CPU timing, draw counts, requested buffer
+  with the module OFF. Optional exact-build preparation-call, four GL import hooks and shared
+  instanced/indirect EGL proc wrappers add broader wall/calling-thread CPU timing, draw counts, requested buffer
   bytes and 1-in-64 sampled API timings. `render_trace_frame()` drains summaries
   once per second. Timings overlap and do not measure GPU execution; GL coverage
-  is game-wide imported calls only. No diagnostic hooks install without the opt-in.
+  includes game-wide imports and supported instanced/indirect proc calls, excluding
+  pointers cached before interception and multi-draw extension calls. No diagnostic hooks install without the opt-in.
 
 - Press **L** to toggle the custom menu. Escape returns from a page to its tiles,
   then closes it. The rounded panel uses a 500 ms exponential ease-out animation;
@@ -186,8 +207,11 @@ instructions. Keep this map current when architecture, files, or commands change
   Text fields live in the AutoGG page; there, L is passed to text input.
   Menu textboxes use launcher Shift/punctuation codes, support Caps Lock and
   repeats, and show a blinking crimson caret with 160 ms exponential ease-out movement. Multiline is opt-in through the
-  final `textBox(..., multiline)` argument and expands by one text line per
+  `textBox(..., multiline)` argument and expands by one text line per
   inserted newline, with the text block centered vertically.
+  Left/Right move the edit cursor. An optional comma-bubble argument draws
+  completed comma-separated entries as individual rounded labels while keeping
+  the saved comma-delimited text; Chat mods and Lobby Scanner use it.
 - **Lobby Scanner** defaults OFF. It matches newly added roster players against
   comma-separated `player/command` rules (for example `steve/hub,alex/home`) and
   submits a command through MinecraftCommands once per join. Use `player#/message` to send
@@ -208,7 +232,11 @@ instructions. Keep this map current when architecture, files, or commands change
   Successful prompts hide the original message. Names accept up to 64 ASCII letters,
   digits, underscores, hyphens or spaces; a busy popup leaves chat visible.
   Disabling, world resets, and handler changes cancel pending acceptance.
-  Both toggles persist in `odiclient.conf`.
+  The saved Player ping toggle sends `/ping <player>` on a focused gameplay
+  Shift/right-click of a loaded player under the crosshair, without interaction
+  reach limits; targeting ignores block occlusion. A passive click queues one lookup for the next live callback,
+  expires after 250 ms, and uses a three-second cooldown across world/toggle changes.
+  All CC Utils toggles persist in `odiclient.conf`.
 - Zoom, Lobby Scanner, AutoGG, Auto Sprint, Motion Blur (including FPS-based averaging, target Hz,
   and screen blur), and FPS Limit settings persist in `odiclient.conf`. Existing
   `autogg.conf` files are loaded and migrated when the new file is absent. Tablist font choice persists in `odiclient.conf`. FPS
@@ -235,11 +263,13 @@ Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
 | `native_input.h` | Launcher 1.8.4 x86_64/libstdc++ GameWindow callback and string bridge for synthetic keyboard/text input. |
 | `minecraft_build.h` | Central Minecraft ELF build ID, AutoGG chat/command packet ABI addresses, Zoom sites, and signatures for the supported game build. |
 | `hook_manager.h`, `hook_manager.cpp`, `tests/test_hook_manager.cpp` | Shared game discovery/build and mapping checks, owned eight-byte patch batches, page protections, rollback, and nearby relay allocation. AutoGG, Zoom, Render, Tablist, and Particles use it. |
-| `auto_gg.cpp`, `auto_gg.h` | Version-gated TextPacket dispatcher hook, formatting removal, trigger/response, native chat sender and MinecraftCommands execution bridge, Lobby Scanner commands/confirmation queue, CC Utils party invite confirmation, additional live dispatcher hooks, cancellation, saved settings, and Chat mods blacklist filtering. |
-| `chat.cpp`, `chat.h`, `tests/test_chat.cpp` | Shared incoming-chat and live-client listener APIs; AutoGG, Chat mods and CC Utils register before gameplay. All listeners observe messages even when hidden; optional after callbacks run after native forwarding/suppression. AutoGG owns the shared TextPacket and verified LocalPlayer-getter hooks; live callbacks borrow the client only for that call. |
+| `auto_gg.cpp`, `auto_gg.h` | Version-gated TextPacket dispatcher hook, formatting removal, trigger/response, native chat sender and MinecraftCommands execution bridge, Lobby Scanner commands/confirmation queue, CC Utils party invite confirmation, CC Utils deferred player ping/cooldown, additional live dispatcher hooks, cancellation, saved settings, and Chat mods blacklist filtering. |
+| `player_target.cpp`, `player_target.h`, `tests/test_player_target.cpp`, `docs/research/player_target_research.md` | Exact-build camera ray and borrowed loaded-player lookup without interaction reach limits; used by CC Utils player ping during shared live-client callbacks. |
+| `chat.cpp`, `chat.h`, `tests/test_chat.cpp` | Shared incoming-chat and live-client listener APIs; AutoGG, Chat mods and CC Utils register before gameplay. All listeners observe messages even when hidden; optional after callbacks run after native forwarding/suppression. AutoGG owns the shared TextPacket and verified LocalPlayer-getter hooks, plus a bounded local diagnostic queue that calls the exact-build native chat UI presentation helper without packet receive or network submission. |
 | `autosprint.cpp`, `autosprint.h` | SDL3/X11 symbol loading, physical keys, focus, synthetic keys, movement releases, and cursor centering. |
 | `motion_blur.cpp`, `motion_blur.h`, `panel_renderer.h` | Shared host EGL/GL adapter, frame history, whole-screen blur, and general `draw_gl_panel()` primitive using `PanelPaint` and 1px `draw_gl_divider()` helper; preserves GL state and antialiases rounded fills/outlines. |
 | `custom_menu.cpp`, `custom_menu.h` | Menu builders/model, scrolling tiles and controls, text input/caret and optional multiline fields, key-binding capture, layout/animation helpers, frame snapshots, and drawing. `custom_menu_is_visible()` includes animations; `custom_menu_captures_input()` governs input/cursor/gameplay. |
+| `docs/CODE_QUALITY.md` | Architecture review, cleanup summary, and concrete growth/persistence maintenance concerns. |
 | `docs/SHARED_APIS.md` | Internal API reuse guide, examples, threading/lifetime constraints, and candidates for future extraction. |
 | `ui_animation.h`, `tests/test_ui_animation.cpp` | Stateless shared quartic/exponential easing for menu, Tablist and popup; no linked runtime dependency. |
 | `menu_style.h` | Menu, scrollbar, slider, and Tablist colors, opacities, blur tint/strength, corner radii, panel spacing, and animation/input timing. |
@@ -254,22 +284,22 @@ Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
 | `skin_image.cpp`, `skin_image.h`, `tests/test_skin_image.cpp` | Host skin allocation independent of export setup, mapped-ELF path lookup (not host dladdr), and asynchronous lossless PNG export to the mod root `skins/` folder; dynamic libc/zlib loading and export checks. |
 | `tablist.cpp`, `tablist.h`, `tests/test_tablist.cpp` | Native roster/skin/world lifecycle observers, copied player cache, Lobby Scanner join notifications, Tab/scroll/right-click input, selected-skin preview, animated dimensions and overlay, saved master toggle, and native/layout checks. |
 | `flarial_presence.cpp`, `flarial_presence.h`, `tests/test_flarial_presence.cpp` | Optional host curl/json-c background presence lookup for Tablist badges; no linked runtime dependency. |
-| `experimental.cpp`, `experimental.h`, `tests/test_experimental.cpp` | Temporary chat typing trigger and regression checks for typing, holds, and popup callbacks. |
 | `docs/research/lobby_scanner_research.md` | Exact-build evidence for additional typed dispatchers used for deferred confirmed sends. |
+| `docs/research/sky_research.md` | Native sky interfaces, full-screen replacement evidence and remaining in-game checks. |
 | `docs/research/rea_mod_candidates.md` | REA smoke-test outcome and bounded static leads for camera controls, brightness, latency, coordinate copying, and durability. |
 | `popup.cpp`, `popup.h`, `tests/test_popup_render.cpp` | Shared thread-safe yes/no popup API, copied text, callbacks, passive input, drawing above GUIs, and headless pixel checks. |
 | `particles.cpp`, `particles.h`, `tests/test_particles.cpp`, `docs/research/particles_research.md` | Player attack effects, native critical emitter, behavior/ABI gates, and investigation evidence. |
 | `environment.cpp`, `environment.h`, `tests/test_environment.cpp` | Local celestial-angle and HSV fog overrides, exact-build Dimension hooks and behavior checks. |
-| `render.cpp`, `render.h`, `tests/test_render.cpp`, `docs/research/render_research.md` | Experimental vertical/horizontal terrain-list filtering, opt-in v6 terrain/preparation CSV timing, executable hook/ABI checks, and native investigation evidence. |
-| `gpu_uniform_cache.cpp`, `gpu_uniform_cache.h`, `tests/test_gpu_uniform_cache.cpp` | Default-OFF uniform reuse v2 trial; seven game GL/EGL import hooks, frame/bind/context-switch checks, owner-only word cache and local trace counters; matrix uploads remain native. V1 caused a measured FPS regression. |
-| `gpu_multidraw.cpp`, `gpu_multidraw.h`, `tests/test_gpu_multidraw.cpp` | Default-OFF per-launch GPU multi-draw trial in Render settings; exact native fallback entry hooks, GLES 3.1 EXT capability/state gates, trace counters and original forwarding. |
-| `render_frame_trace.cpp`, `render_frame_trace.h`, `tests/test_render_frame_trace.cpp` | Opt-in v6 wall/calling-thread CPU stages: callback gaps, client, limiter, overlays, exact native GL submit vtable and game EGL swap import. Nested stages overlap; no work is skipped. |
-| `render_gl_trace.cpp`, `render_gl_trace.h`, `tests/test_render_gl_trace.cpp` | Opt-in exact-build game GL import profiling: draw/byte counts and sampled API wall times; always forwards originals. |
+| `sky_renderer.cpp`, `sky_renderer.h`, `tests/test_sky_renderer.cpp` | Full-screen camera-directed sky with procedural atmosphere, sun, moon and stars; one-degree horizon blend, GPU atmosphere reuse across tiny time changes; linked-program/draw gates, per-thread/context metadata, same-frame native celestial suppression and real GLES pixel checks. |
+| `render.cpp`, `render.h`, `tests/test_render.cpp`, `docs/research/render_research.md` | Experimental vertical/horizontal terrain-list filtering, opt-in v8 terrain/preparation CSV timing, executable hook/ABI checks, and native investigation evidence. |
+| `gpu_shader_services.cpp`, `gpu_shader_services.h`, `tests/test_gpu_shader_services.cpp` | Exact-build shader-source/compile and link/delete/use-program observer service for Environment; always forwards native calls, with no uniform-reuse trial. |
+| `render_frame_trace.cpp`, `render_frame_trace.h`, `tests/test_render_frame_trace.cpp` | Opt-in v8 wall/calling-thread CPU stages: callback gaps, client, limiter, overlays, exact native GL submit vtable and game EGL swap import. Nested stages overlap; no work is skipped. |
+| `render_gl_trace.cpp`, `render_gl_trace.h`, `tests/test_render_gl_trace.cpp` | Shared direct-draw and EGL proc-lookup owner with optional draw substitution; native forwarding otherwise. Opt-in imported GL draw/byte counts and sampled API timing use separate buffer hooks. |
 | `analog_input.cpp`, `analog_input.h` | Nonblocking mod/helper IPC, peer identity, status, mixed-input startup flag. |
 | `nuphy_analog.py` | Analog mapping, Unix socket server, virtual controller via `/dev/uinput`, neutralization and output throttling. |
 | `nuphy_distance.py` | NuPhy `/dev/hidraw*` device discovery, reporting protocol, travel decoding; imported by the analog helper. |
 | `api_stubs.cpp` | Build-only launcher API placeholder libraries; never install these stubs. |
-| `build.sh`, `install.sh` | Compile, package, and install. Build automatically runs install. |
+| `build.sh`, `install.sh`, `tests/test_build_install.sh` | Compile/package/install from this source tree; build ID fingerprints actual inputs and compiler. Installer verifies SHA-256 against `build-info.txt` and byte equality. Build automatically runs install. |
 | `trace_terrain.sh`, `Logs/` | Source-folder diagnostic launcher helper and local terrain CSV captures; close the existing Qt launcher before starting the helper. Logs are personal trial data, not distribution assets. |
 | `1.0.0/x86_64/mod.json` | Launcher mod identity, version, architecture, and description. |
 | `1.0.0/x86_64/` | Runtime package: compiled mod plus installed copies of helpers and README. Edit root sources, then rebuild/install. |
@@ -298,7 +328,7 @@ Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
 - `mod_preinit()` enables mixed input and registers window creation. Once a window
   exists, `onWindowCreated()` attaches keyboard, mouse, and swap-buffer callbacks.
   `onFrame()` coordinates cursor, rendering, sprint, analog input, and menu state.
-  `mod_init()` initializes AutoGG, Zoom, Uniform reuse, GPU multi-draw, Render, Tablist, Particles, and Environment after Minecraft loads.
+  `mod_init()` initializes AutoGG, Zoom, shared shader/program services, Render, Tablist, Particles, and Environment after Minecraft loads.
 - Menu callbacks can run on keyboard, mouse, and render threads. The short
   `UiLock` protects model edits and frame snapshots; GPU drawing and action
   callbacks run after unlocking. Keep capture/visibility state atomic because
@@ -432,7 +462,7 @@ This updates `build/`, `1.0.0/x86_64/`, and installs into the launcher's mods
 directory. To stage elsewhere, use `bash build.sh /tmp/blank-client-menu-mods`.
 `bash install.sh [mods-directory]` installs an existing binary and copies root
 helpers/README. Restart the launcher and activate the mod in the chosen profile;
-restart Minecraft after rebuilding to load the new binary.
+restart Minecraft after rebuilding to load the new binary. Build prints source/install paths, build ID and binary SHA-256; `build-info.txt` records that identity. See `docs/CODE_QUALITY.md` for the scoped architecture review.
 
 Run the checks relevant to the changed module (create `build/` first if absent):
 
@@ -442,8 +472,6 @@ g++ -std=c++17 -Wall -Wextra -Werror tests/test_fps_display.cpp display_layout.c
 ./build/test-fps-display
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_ui_animation.cpp -o build/test-ui-animation
 ./build/test-ui-animation
-g++ -std=c++17 -Wall -Wextra -Werror tests/test_experimental.cpp experimental.cpp -o build/test-experimental
-./build/test-experimental
 clang++ -std=c++17 -Wall -Wextra -Werror -I/usr/include/freetype2 \
     tests/test_popup_render.cpp popup.cpp custom_font.cpp motion_blur.cpp -ldl -lEGL -lGLESv2 -o build/test-popup-render
 LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-popup-render
@@ -458,16 +486,23 @@ g++ -std=c++17 -Wall -Wextra -Werror tests/test_sdl_input.cpp -o build/test-sdl-
 python3 tests/test_native_build.py
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_environment.cpp hook_manager.cpp -ldl -o build/test-environment
 ./build/test-environment
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_sky_renderer.cpp -ldl -pthread -lEGL -lGLESv2 -o build/test-sky-renderer
+LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-sky-renderer
+# Optional 768x512 day/night PPM previews in build/: add --preview.
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_particles.cpp hook_manager.cpp -ldl -o build/test-particles
 ./build/test-particles
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_hook_manager.cpp -ldl -o build/test-hook-manager
 ./build/test-hook-manager
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_zoom.cpp hook_manager.cpp -ldl -pthread -o build/test-zoom
 ./build/test-zoom
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_player_target.cpp -o build/test-player-target
+./build/test-player-target
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_chat.cpp chat.cpp -o build/test-chat
 ./build/test-chat
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_auto_gg.cpp chat.cpp hook_manager.cpp -ldl -o build/test-auto-gg
 ./build/test-auto-gg
+# Settings/behavior checks without the native hook fixture:
+./build/test-auto-gg --settings
 g++ -std=c++17 -Wall -Wextra -Werror -DTABLIST_PRESENCE_FIXTURE \
     tests/test_tablist.cpp tests/test_flarial_presence.cpp skin_image.cpp hook_manager.cpp -ldl -pthread -o build/test-tablist
 ./build/test-tablist
@@ -475,7 +510,7 @@ g++ -std=c++17 -Wall -Wextra -Werror tests/test_skin_image.cpp -ldl -pthread -o 
 ./build/test-skin-image
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_flarial_presence.cpp -ldl -o build/test-flarial-presence
 ./build/test-flarial-presence
-g++ -std=c++17 -Wall -Wextra -Werror tests/test_render.cpp render_frame_trace.cpp render_gl_trace.cpp gpu_multidraw.cpp gpu_uniform_cache.cpp hook_manager.cpp -ldl -o build/test-render
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_render.cpp render_frame_trace.cpp render_gl_trace.cpp hook_manager.cpp -ldl -o build/test-render
 ./build/test-render
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_render_gl_trace.cpp hook_manager.cpp -ldl -o build/test-render-gl-trace
 ./build/test-render-gl-trace
@@ -483,11 +518,9 @@ g++ -std=c++17 -O2 -Wall -Wextra -Werror tests/test_render_frame_trace.cpp hook_
 ./build/test-render-frame-trace
 ./build/test-render-frame-trace --present-only
 ./build/test-render-frame-trace --submit-only
-g++ -std=c++17 -Wall -Wextra -Werror tests/test_gpu_multidraw.cpp hook_manager.cpp -ldl -o build/test-gpu-multidraw
-./build/test-gpu-multidraw
-g++ -std=c++17 -Wall -Wextra -Werror tests/test_gpu_uniform_cache.cpp hook_manager.cpp -ldl -pthread -lEGL -lGLESv2 -o build/test-gpu-uniform-cache
-LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-gpu-uniform-cache --egl
-LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-gpu-uniform-cache --benchmark
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_gpu_shader_services.cpp hook_manager.cpp -ldl -o build/test-gpu-shader-services
+./build/test-gpu-shader-services
+bash tests/test_build_install.sh
 python3 tests/test_analog.py
 g++ -std=c++17 -Wall -Wextra -Werror analog_input.cpp tests/test_analog_input.cpp -ldl -o build/test-analog-input
 ./build/test-analog-input

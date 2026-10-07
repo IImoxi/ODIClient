@@ -11,12 +11,10 @@
 #include "display_layout.h"
 #include "render.h"
 #include "render_frame_trace.h"
-#include "gpu_multidraw.h"
-#include "gpu_uniform_cache.h"
+#include "gpu_shader_services.h"
 #include "tablist.h"
 #include "particles.h"
 #include "environment.h"
-#include "experimental.h"
 #include "popup.h"
 #include "custom_menu.h"
 #include "client_modules.h"
@@ -75,7 +73,10 @@ bool zoomGameplay() {
 }
 bool onMouseButton(void*, double, double, int button, int action) {
     popup_on_mouse_button(button, action, isSprintReady() && autosprint_has_focus());
-    return tablist_on_mouse_button(button, action, zoomGameplay());
+    if (tablist_on_mouse_button(button, action, zoomGameplay())) return true;
+    if (button == 2 && action == 0 && zoomGameplay() && autosprint_shift_down())
+        auto_gg_ping_click();
+    return false;
 }
 bool onScroll(void*, double, double, double, double dy) {
     if (zoomGameplay() && tablist_on_scroll(dy)) return true;
@@ -107,8 +108,6 @@ void onFrame(void*, void*, void*) {
     int averageHz = adaptiveAverage ? __atomic_load_n(&blurAverageHz, __ATOMIC_RELAXED) : 0;
     bool blurOn = __atomic_load_n(&blurEnabled, __ATOMIC_RELAXED) && gameActive;
     long long frameDeltaNs = fps_limiter_frame_delta_ns();
-    gpu_uniform_cache_frame();
-    gpu_multidraw_frame();
     render_trace_frame(frameDeltaNs);
     if (adaptiveAverage && frameDeltaNs > 1000000000LL / averageHz) blurOn = false;
     auto overlayTrace=render_frame_trace_stamp();
@@ -161,7 +160,6 @@ bool onKeyboard(void*, int key, int action) {
     if ((key == 87 || key == 65 || key == 83 || key == 68) && action != 2
         && __atomic_load_n(&analogCapture, __ATOMIC_RELAXED))
         return true; // Let releases through to clear any old digital movement.
-    experimental_on_keyboard(key, action, zoomGameplay(), isSprintReady() && autosprint_has_focus());
     bool menuConsumed = custom_menu_on_keyboard(key, action);
     bool tabConsumed = tablist_on_keyboard(key, action, !menuConsumed && zoomGameplay());
     if (tabConsumed) return true;
@@ -301,12 +299,11 @@ extern "C" __attribute__((visibility("default"))) void mod_preinit() {
 extern "C" __attribute__((visibility("default"))) void mod_init() {
     auto_gg_init();
     zoom_init();
-    gpu_uniform_cache_init();
-    gpu_multidraw_init();
+    gpu_shader_services_init();
+    environment_init();
     render_init();
     tablist_init();
     particles_init();
-    environment_init();
     __atomic_store_n(&centerCursorEnabled, client_settings_get_center_cursor(), __ATOMIC_RELAXED);
     bool zoom; int key, defaultLevel, scrollStep;
     client_settings_get_zoom(&zoom, &key, &defaultLevel, &scrollStep);
@@ -376,6 +373,11 @@ void client_set_party_invites(bool value) {
     client_settings_set_cc_utils(settings);
 }
 bool client_party_invites_enabled() { return client_settings_get_cc_utils().partyInvites; }
+void client_set_player_ping(bool value) {
+    auto settings = client_settings_get_cc_utils(); settings.playerPing = value;
+    client_settings_set_cc_utils(settings);
+}
+bool client_player_ping_enabled() { return client_settings_get_cc_utils().playerPing; }
 
 void client_set_fps_display(bool value) {
     auto settings = client_settings_get_fps_display(); settings.enabled = value;

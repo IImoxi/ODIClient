@@ -27,6 +27,8 @@ struct GameWindowHandle { MockNativeWindow* window = &native; void* sharedPtrCon
 static GameWindowHandle window;
 static void (*created)(void*);
 static bool (*keyboard)(void*, int, int);
+static bool (*mouseButton)(void*, double, double, int, int);
+static int pingClicks;
 static bool (*mousePosition)(void*, double, double, bool);
 static void (*frame)(void*, void*, void*);
 static bool menuOpen;
@@ -47,10 +49,8 @@ void client_settings_set_center_cursor(bool) {}
 bool client_settings_get_center_cursor() { return false; }
 extern "C" void game_window_add_mouse_scroll_callback(GameWindowHandle*, void*, bool (*callback)(void*, double, double, double, double)) { scroll = callback; }
 void auto_gg_init() {}
-void gpu_uniform_cache_init() {}
-void gpu_uniform_cache_frame() {}
-void gpu_multidraw_init() {}
-void gpu_multidraw_frame() {}
+void auto_gg_ping_click() { ++pingClicks; }
+void gpu_shader_services_init() {}
 void render_init() {}
 void render_trace_frame(long long) {}
 RenderFrameStamp render_frame_trace_begin() { return {}; }
@@ -58,7 +58,6 @@ RenderFrameStamp render_frame_trace_stamp() { return {}; }
 void render_frame_trace_record(RenderFrameStage,RenderFrameStamp) {}
 void render_frame_trace_end(RenderFrameStamp) {}
 void tablist_init() {}
-void experimental_on_keyboard(int, int, bool, bool) {}
 void popup_on_mouse_button(int, int, bool) {}
 void popup_render(bool, long long) {}
 void environment_init() {}
@@ -74,7 +73,7 @@ bool tablist_on_keyboard(int key, int action, bool gameplay) {
 }
 bool tablist_on_scroll(double) { return tabHeld; }
 bool tablist_on_mouse_button(int,int,bool) { return false; }
-extern "C" void game_window_add_mouse_button_callback(GameWindowHandle*,void*,bool (*)(void*,double,double,int,int)) {}
+extern "C" void game_window_add_mouse_button_callback(GameWindowHandle*,void*,bool (*callback)(void*,double,double,int,int)) { mouseButton = callback; }
 LobbyWatchSettings client_settings_get_lobby_watch() { return {}; }
 CCUtilsSettings client_settings_get_cc_utils() { return {}; }
 void client_settings_set_cc_utils(CCUtilsSettings) {}
@@ -309,6 +308,20 @@ int main() {
     tick(); assert(warps == before + 1);
     locked = true; native.disabled = true; tick(); client_set_center_cursor(false);
     locked = false; native.disabled = false; tick(); assert(warps == before + 1);
+    locked = true; tick();
+    assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 0);
+    keys[50] = true;
+    assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 1);
+    assert(!mouseButton(nullptr, 0, 0, 2, 2) && pingClicks == 1);
+    assert(!mouseButton(nullptr, 0, 0, 1, 0) && pingClicks == 1);
+    keys[50] = false; keys[62] = true;
+    assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 2);
+    menuOpen = true;
+    assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 2);
+    menuOpen = false; hasFocus = false;
+    assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 2);
+    hasFocus = true; locked = false;
+    assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 2);
     std::puts("PASS: zoom hold/rebind/scroll bounds/disable/focus/menu handling; L opens the custom-menu route, Escape closes it, and cursor/sprint state follows the menu; blur, FPS cap, and AutoGG keep running");
 }
 

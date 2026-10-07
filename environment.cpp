@@ -3,6 +3,7 @@
 #include "client_settings.h"
 #include "minecraft_build.h"
 #include "hook_manager.h"
+#include "sky_renderer.h"
 
 namespace {
 namespace profile = minecraft_build::current::environment;
@@ -12,18 +13,27 @@ using Angle = float (*)(void*, int, float);
 Fog originals[3];
 Angle originalAngle;
 bool ready;
+float lastSkyAngle;
 const char* error = "Environment: initializing";
-unsigned long long options = (6000ull << 3) | (100ull << 34);
+unsigned long long options = (6000ull << 3) | (100ull << 34) | (1ull << 42);
 unsigned long long snapshot() { return __atomic_load_n(&options, __ATOMIC_ACQUIRE); }
 EnvironmentSettings settings(unsigned long long v) {
     return {bool(v & 1), bool(v & 2), bool(v & 4), int((v >> 3) & 32767),
-            int((v >> 18) & 511), int((v >> 27) & 127), int((v >> 34) & 127)};
+            int((v >> 18) & 511), int((v >> 27) & 127), int((v >> 34) & 127),
+            bool(v & (1ull << 41)), bool(v & (1ull << 42)), bool(v & (1ull << 43)), bool(v & (1ull << 44)),
+            bool(v & (1ull << 45)), bool(v & (1ull << 46))};
 }
 unsigned long long pack(EnvironmentSettings s) {
     return static_cast<unsigned long long>(s.enabled) | (static_cast<unsigned long long>(s.time) << 1)
         | (static_cast<unsigned long long>(s.fog) << 2) | (static_cast<unsigned long long>(s.ticks) << 3)
         | (static_cast<unsigned long long>(s.hue) << 18) | (static_cast<unsigned long long>(s.saturation) << 27)
-        | (static_cast<unsigned long long>(s.value) << 34);
+        | (static_cast<unsigned long long>(s.value) << 34)
+        | (static_cast<unsigned long long>(s.sky) << 41)
+        | (static_cast<unsigned long long>(s.clouds) << 42)
+        | (static_cast<unsigned long long>(s.vanillaCelestials) << 43)
+        | (static_cast<unsigned long long>(s.skyLookup) << 44)
+        | (static_cast<unsigned long long>(s.skyHalfResolution) << 45)
+        | (static_cast<unsigned long long>(s.skyReducedSamples) << 46);
 }
 int clamp(int v, int max) { return v < 0 ? 0 : v > max ? max : v; }
 void change(unsigned long long mask, unsigned long long bits) {
@@ -55,7 +65,9 @@ float angle(void* dimension, int ticks, float partialTick) {
     if (__atomic_load_n(&ready, __ATOMIC_ACQUIRE) && s.enabled && s.time) {
         ticks = s.ticks; partialTick = 0.0f;
     }
-    return originalAngle(dimension, ticks, partialTick);
+    float result = originalAngle(dimension, ticks, partialTick);
+    __atomic_store(&lastSkyAngle, &result, __ATOMIC_RELAXED);
+    return result;
 }
 bool install(unsigned long base) {
     if (!hooks::supported(base)) return false;
@@ -87,12 +99,18 @@ void environment_init() {
     if (initialized) return;
     initialized = true;
     __atomic_store_n(&options, pack(client_settings_get_environment()), __ATOMIC_RELEASE);
+    sky_renderer_init();
     if (!hooks::initialize() || !install(hooks::find_game())) {
         error = "Environment: unsupported Minecraft build"; return;
     }
     __atomic_store_n(&ready, true, __ATOMIC_RELEASE); error = nullptr;
 }
 const char* environment_error() { return error; }
+float environment_sky_angle() {
+    float value;
+    __atomic_load(&lastSkyAngle, &value, __ATOMIC_RELAXED);
+    return value;
+}
 void client_set_environment(bool v) { change(1, v); }
 bool client_environment_enabled() { return snapshot() & 1; }
 void client_set_environment_time(bool v) { change(2, static_cast<unsigned long long>(v) << 1); }
@@ -107,3 +125,9 @@ void client_set_environment_saturation(int v) { change(127ull << 27, static_cast
 int client_environment_saturation() { return settings(snapshot()).saturation; }
 void client_set_environment_value(int v) { change(127ull << 34, static_cast<unsigned long long>(clamp(v, 100)) << 34); }
 int client_environment_value() { return settings(snapshot()).value; }
+void client_set_environment_sky(bool v) {
+    change(1ull << 41, static_cast<unsigned long long>(v) << 41);
+}
+bool client_environment_sky() { return snapshot() & (1ull << 41); }
+void client_set_environment_vanilla_celestials(bool v) { change(1ull << 43, static_cast<unsigned long long>(v) << 43); }
+bool client_environment_vanilla_celestials() { return snapshot() & (1ull << 43); }

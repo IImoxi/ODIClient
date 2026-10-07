@@ -3,7 +3,7 @@ set -euo pipefail
 
 client_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 mkdir -p -- "$client_dir/Logs"
-export ODI_TERRAIN_TRACE="$client_dir/Logs/terrain-v6.csv"
+export ODI_TERRAIN_TRACE="$client_dir/Logs/terrain-v8.csv"
 
 # A running Qt launcher may receive the launch request without the new environment.
 if pgrep -u "$UID" -f '(^|/)mcpelauncher-ui-qt([[:space:]]|$)' >/dev/null; then

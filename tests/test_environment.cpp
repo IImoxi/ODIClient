@@ -7,6 +7,7 @@
 extern "C" void* mcpelauncher_host_dlopen(const char* n, int f) { return dlopen(n, f); }
 extern "C" void* mcpelauncher_host_dlsym(void* l, const char* n) { return dlsym(l, n); }
 EnvironmentSettings saved;
+void sky_renderer_init() {}
 EnvironmentSettings client_settings_get_environment() { return saved; }
 void client_settings_set_environment(EnvironmentSettings s) { saved = s; }
 Color nativeFog(void*, const Color& c, float b) { return {c.r*b, c.g*b, c.b*b, c.a}; }
@@ -36,6 +37,7 @@ int main() {
     auto gray = fog<0>(nullptr, c, 1); assert(gray.r == 0.4f && gray.g == gray.r && gray.b == gray.r);
     client_set_environment_ticks(23999);
     assert(angle(nullptr, 1234, 0.75f) == 0.25f && receivedTicks == 23999 && receivedPartial == 0);
+    assert(environment_sky_angle() == 0.25f);
     client_set_environment_time(false); angle(nullptr, 1234, 0.75f);
     assert(receivedTicks == 1234 && receivedPartial == 0.75f);
     client_set_environment_fog(false); assert(fog<1>(nullptr, c, 0.5f).b == c.b*0.5f);

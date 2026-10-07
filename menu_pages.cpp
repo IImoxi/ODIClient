@@ -3,15 +3,14 @@
 #include "client_settings.h"
 #include "auto_gg.h"
 #include "chat.h"
+#include "player_target.h"
 #include "analog_input.h"
 #include "zoom.h"
 #include "render.h"
-#include "gpu_multidraw.h"
-#include "gpu_uniform_cache.h"
 #include "environment.h"
+#include "sky_renderer.h"
 #include "tablist.h"
 #include "particles.h"
-#include "experimental.h"
 #include "ui_scale.h"
 
 namespace {
@@ -34,14 +33,6 @@ bool trailMode() { return !client_blur_average(); }
 }
 
 void declare_menu_pages() {
-    MenuPage experimentalPage = newPage("Experimental");
-    experimentalPage.toggle("Enable Experimental", client_set_experimental, client_experimental_enabled)
-        .button("Show test popup", experimental_show_test)
-        .text("Type test in chat (T) to show a yes/no prompt.")
-        .text("Hold left/right click for one second: yes/no.");
-    newTile("Experimental").opens(experimentalPage)
-        .onToggle(client_set_experimental, client_experimental_enabled);
-
     MenuPage tablistPage = newPage("Tablist");
     tablistPage.toggle("Enable Tablist", client_set_tablist, client_tablist_enabled)
         .dropdown("Font", "Inter", "Mojangles", client_settings_set_tablist_mojangles,
@@ -111,16 +102,13 @@ void declare_menu_pages() {
         .text("Experimental terrain distance limits.")
         .text("Can hide visible cliffs or cave openings.");
     if (render_error()) renderPage.text(render_error());
-    renderPage.toggle("GPU multi-draw (trial)", client_set_gpu_multidraw, client_gpu_multidraw_enabled)
-        .text("Batch supported draws; defaults OFF each launch.")
-        .text("Trial may have no effect on this renderer.");
-    renderPage.toggle("Uniform reuse v2 (trial)", client_set_uniform_cache, client_uniform_cache_enabled)
-        .text("Reuse identical shader values; OFF each launch.")
-        .text("Disable if lighting or textures look wrong.");
     newTile("Render").opens(renderPage).onToggle(client_set_render, client_render_enabled);
 
     MenuPage environmentPage = newPage("Environment");
     environmentPage.toggle("Enable Environment", client_set_environment, client_environment_enabled)
+        .toggle("Physically inspired sky", client_set_environment_sky, client_environment_sky).whenEnabled()
+        .toggle("Vanilla sun/moon", client_set_environment_vanilla_celestials, client_environment_vanilla_celestials)
+            .whenEnabled(client_environment_sky).groupWithPrevious()
         .toggle("Time changer", client_set_environment_time, client_environment_time).whenEnabled()
         .slider("Time (ticks)", 0, 23999, client_set_environment_ticks,
                 client_environment_ticks).whenEnabled(client_environment_time).groupWithPrevious()
@@ -132,6 +120,8 @@ void declare_menu_pages() {
         .slider("Value (%)", 0, 100, client_set_environment_value,
                 client_environment_value).whenEnabled(client_environment_fog);
     if (environment_error()) environmentPage.text(environment_error());
+    else if (sky_renderer_error()) environmentPage.text(sky_renderer_error());
+    else environmentPage.text(sky_renderer_status());
     newTile("Environment").opens(environmentPage)
         .onToggle(client_set_environment, client_environment_enabled);
 
@@ -160,7 +150,7 @@ void declare_menu_pages() {
     MenuPage chatPage = newPage("Chat mods");
     chatPage.toggle("Enable Chat mods", client_set_chat_mods, client_chat_mods_enabled)
         .toggle("Message blacklist", client_set_message_blacklist, client_message_blacklist)
-        .textBox("Keywords", chatSettings.keywords, client_set_chat_keywords, true).whenEnabled()
+        .textBox("Keywords", chatSettings.keywords, client_set_chat_keywords, true, true).whenEnabled()
         .text("Comma-separated keywords; Shift+Enter: new line.")
         .text("Matching incoming messages are hidden.");
     newTile("Chat mods").opens(chatPage).onToggle(client_set_chat_mods, client_chat_mods_enabled);
@@ -169,7 +159,7 @@ void declare_menu_pages() {
     MenuPage lobbyPage = newPage("Lobby Scanner");
     lobbyPage.text("Run a command when a listed player joins the lobby.")
         .toggle("Enable Lobby Scanner", client_set_lobby_watch, client_lobby_watch_enabled)
-        .textBox("Players / commands", lobbyWatch.rules, client_set_lobby_watch_rules).whenEnabled()
+        .textBox("Players / commands", lobbyWatch.rules, client_set_lobby_watch_rules, false, true).whenEnabled()
         .text("steve/hub runs a command; steve#/hub sends chat.")
         .text("steve?/hub asks; steve?#/hub asks to send chat.");
     newTile("Lobby Scanner").opens(lobbyPage).onToggle(client_set_lobby_watch, client_lobby_watch_enabled);
@@ -177,8 +167,11 @@ void declare_menu_pages() {
     MenuPage ccUtilsPage = newPage("CC Utils");
     ccUtilsPage.toggle("Enable CC Utils", client_set_cc_utils, client_cc_utils_enabled)
         .toggle("Custom party invites dialog", client_set_party_invites, client_party_invites_enabled).whenEnabled()
-        .text("Ask before accepting party invites from chat.").whenEnabled();
+        .text("Ask before accepting party invites from chat.").whenEnabled()
+        .toggle("Player ping", client_set_player_ping, client_player_ping_enabled).whenEnabled()
+        .text("Shift + right click a player; 3 second cooldown.").whenEnabled();
     if (chat_error()) ccUtilsPage.text(chat_error());
+    else if (player_target_error()) ccUtilsPage.text(player_target_error());
     newTile("CC Utils").opens(ccUtilsPage).onToggle(client_set_cc_utils, client_cc_utils_enabled);
 
     char trigger[256], response[256];

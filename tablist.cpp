@@ -547,7 +547,7 @@ void tablist_render(bool gameplay, long long frameNs) {
     custom_font_set_opacity(alpha * menu_style::tablistTextOpacity);
     char title[64] = "Players - ", digits[12]; number(digits, total); append(title, digits);
     custom_font_draw_left_color(title, (screenW - custom_font_text_width(title, font)) / 2,
-                                top + padding, font, menu_style::tablistText.red,
+                                top + padding - font / 4, font, menu_style::tablistText.red,
                                 menu_style::tablistText.green, menu_style::tablistText.blue, screenW, screenH);
     // Clip newly revealed content to the expanding panel without changing game scissor state.
     GLint oldScissor[4]; glGet(GL_SCISSOR_BOX,oldScissor);

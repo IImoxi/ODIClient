@@ -36,4 +36,9 @@ bool chat_listen_live(ChatLiveListener listener); // Register at mod_init.
 // copied numeric client identity and text; world reset/disable cancels them.
 bool chat_send_command(const ChatLiveContext& context, const char* command);
 bool chat_send_text(const ChatLiveContext& context, const char* text);
+// Queue one copied local diagnostic line for Minecraft's native chat UI helper.
+// It is processed on the next live-client callback and never constructs or
+// sends a network packet. A newer pending line replaces an older one. Input
+// must be valid single-line UTF-8; true means queued, not displayed.
+bool chat_print_local(const char* text);
 void chat_notify_live(const ChatLiveContext& context); // Native owner only.
