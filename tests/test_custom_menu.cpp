@@ -583,6 +583,72 @@ int main(int argc, char** argv) {
     renderAt(3500000000LL);
     assert(drawnControls.count == 1 && drawnControls.rows[1] == -1);
 
+    // Dropdown header/options share compact geometry and animated hover routing.
+    averagingEnabled = true;
+    modePage.items[1].type = pageDropdown;
+    renderAt(3500000000LL);
+    dropdownRect(1, lastScreenHeight, x, top, width, height);
+    cursorX = x + width / 2; cursorY = top + height / 2; cursorPositionValid = true;
+    renderAt(3500000000LL);
+    assert(buttonMotions[3][1].targetHover);
+    click(cursorX, cursorY);
+    renderAt(3500000000LL);
+    assert(modePage.items[1].expanded);
+    assert(drawnControls.offsetsPercent[2] == 2 * menu_style::rowStridePercent
+           + 2 * menu_style::dropdownButtonHeightPercent);
+    cursorY = top + 2 * height + height / 2;
+    renderAt(3500000000LL);
+    assert(buttonMotions[3][pageItemCapacity + 3].targetHover);
+    click(cursorX, cursorY);
+    renderAt(3500000000LL);
+    assert(testModuleEnabled && !modePage.items[1].expanded);
+    // Outside clicks dismiss without selecting or activating another control.
+    dropdownRect(1, lastScreenHeight, x, top, width, height);
+    click(x + width / 2, top + height / 2);
+    renderAt(3500000000LL);
+    assert(modePage.items[1].expanded);
+    click(x - 1, top + height);
+    renderAt(3500000000LL);
+    assert(!modePage.items[1].expanded && testModuleEnabled);
+    click(x + width / 2, top + height / 2);
+    renderAt(3500000000LL);
+    click(panelX - 1, top, rightMouseButton);
+    renderAt(3500000000LL);
+    assert(!modePage.items[1].expanded && activePage == 2 && testModuleEnabled);
+    click(x + width / 2, top + height / 2);
+    renderAt(3500000000LL);
+    pageItemRect(0, lastScreenHeight, x, top, width, height);
+    click(x + width / 2, top + height / 2);
+    renderAt(3500000000LL);
+    assert(!modePage.items[1].expanded && averagingEnabled && testModuleEnabled);
+
+    // Adjacent fills reach the outline, including the lower rounded edge.
+    GLint dropdownClip[4]; glGetIntegerv(GL_SCISSOR_BOX, dropdownClip);
+    bool dropdownClipEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    bool savedDropdownClipping = clippingContent;
+    glDisable(GL_SCISSOR_TEST); glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST); glScissor(0, 0, 800, 600); clippingContent = true;
+    MenuFrame dropdownFrame; dropdownFrame.pageIndex = 2;
+    buttonMotions[3][pageItemCapacity + 2] = {};
+    buttonMotions[3][pageItemCapacity + 3] = {};
+    drawDropdownRow(dropdownFrame, 202, 100, 100, 100, 60, 120, 20, 600, 10, true);
+    drawDropdownRow(dropdownFrame, 203, 100, 100, 100, 60, 140, 20, 600, 10, true);
+    unsigned char seamAbove[4], seamBelow[4], bottomFill[4];
+    glReadPixels(103, 460, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, seamAbove);
+    glReadPixels(103, 459, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, seamBelow);
+    glReadPixels(110, 442, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, bottomFill);
+    assert(seamAbove[0] > 0 && seamAbove[0] == seamBelow[0]);
+    assert(bottomFill[0] == seamAbove[0]);
+    GLint restoredDropdownClip[4]; glGetIntegerv(GL_SCISSOR_BOX, restoredDropdownClip);
+    assert(restoredDropdownClip[0] == 0 && restoredDropdownClip[1] == 0
+           && restoredDropdownClip[2] == 800 && restoredDropdownClip[3] == 600);
+    glScissor(dropdownClip[0], dropdownClip[1], dropdownClip[2], dropdownClip[3]);
+    if (!dropdownClipEnabled) glDisable(GL_SCISSOR_TEST);
+    clippingContent = savedDropdownClipping;
+    modePage.items[1].type = pageChoice;
+    testModuleEnabled = false; averagingEnabled = false;
+    renderAt(3500000000LL);
+
     if (argc > 1 && std::strcmp(argv[1], "--switch") == 0) {
         std::puts("PASS: switch icons/slide/reversal, unfilled masters, 1px dividers, row clicks, dependent toggles, conditional sliders, and named mode choices");
         return 0;
@@ -598,10 +664,10 @@ int main(int argc, char** argv) {
         oversized.items[child].type = pageButton;
     }
     averagingEnabled = true;
-    for (int offset = 0; offset <= 11; ++offset) {
+    for (int offset = 0; offset <= pageItemCapacity - 5; ++offset) {
         ControlLayout continued = layoutControls(oversized, 2, offset);
-        assert(continued.viewCount == 12 && continued.count == pageItemCapacity);
-        assert(continued.view == offset && continued.indices[0] == 0 && continued.rows[15] == 15);
+        assert(continued.viewCount == pageItemCapacity - 4 && continued.count == pageItemCapacity);
+        assert(continued.view == offset && continued.indices[0] == 0 && continued.rows[pageItemCapacity - 1] == pageItemCapacity - 1);
     }
     averagingEnabled = false;
     ControlLayout collapsed = layoutControls(oversized, 2, 3);

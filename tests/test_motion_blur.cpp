@@ -61,6 +61,7 @@ int main() {
     assert(eglMakeCurrent(display, surface, surface, context));
     std::printf("GLES test renderer: %s\n", glGetString(GL_RENDERER));
     clear(1, 0, 0);
+    pixel(255, 0, 0);
 
     // Deliberately hostile state, including sampler and pixel-unpack bindings.
     GLuint textures[2], sampler, buffer, vao, fbos[2];

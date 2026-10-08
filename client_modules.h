@@ -1,5 +1,10 @@
 #pragma once
 
+void client_set_jitter(bool value);
+bool client_jitter_enabled();
+void client_set_jitter_sample_mode(int value);
+int client_jitter_sample_mode();
+
 void client_set_zoom(bool value);
 bool client_zoom_enabled();
 void client_set_zoom_key(int value);
@@ -16,6 +21,9 @@ void client_set_blur(bool value);
 bool client_blur_enabled();
 void client_set_fps_limit(bool value);
 bool client_fps_limit_enabled();
+void client_set_fps_native(bool value);
+bool client_fps_native();
+bool client_fps_native_unavailable();
 void client_set_analog(bool value);
 bool client_analog_enabled();
 void client_set_auto_gg(bool value);
@@ -89,12 +97,26 @@ void client_set_environment(bool value);
 bool client_environment_enabled();
 void client_set_environment_sky(bool value);
 bool client_environment_sky();
+void client_set_environment_clouds(bool value);
+bool client_environment_clouds();
+void client_set_environment_cloud_detail(int value);
+int client_environment_cloud_detail();
+void client_set_environment_cloud_samples(int value);
+int client_environment_cloud_samples();
+void client_set_environment_sky_quarter_resolution(bool value);
+bool client_environment_sky_quarter_resolution();
+void client_set_environment_cloud_resolution(int value);
+int client_environment_cloud_resolution();
 void client_set_environment_vanilla_celestials(bool value);
 bool client_environment_vanilla_celestials();
 void client_set_environment_time(bool value);
 bool client_environment_time();
 void client_set_environment_fog(bool value);
 bool client_environment_fog();
+void client_set_environment_weather(bool value);
+bool client_environment_weather();
+void client_set_environment_weather_amount(int value);
+int client_environment_weather_amount();
 void client_set_environment_ticks(int value);
 int client_environment_ticks();
 void client_set_environment_hue(int value);

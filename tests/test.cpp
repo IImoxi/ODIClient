@@ -10,6 +10,8 @@
 #include "../auto_gg.h"
 #include "../client_settings.h"
 #include "../client_modules.h"
+#include "../display_layout.h"
+#include "../projection_jitter.h"
 
 struct MockNativeWindow {
     virtual ~MockNativeWindow() = default;
@@ -51,6 +53,8 @@ extern "C" void game_window_add_mouse_scroll_callback(GameWindowHandle*, void*, 
 void auto_gg_init() {}
 void auto_gg_ping_click() { ++pingClicks; }
 void gpu_shader_services_init() {}
+void projection_jitter_init() {}
+void projection_jitter_frame(int, int) {}
 void render_init() {}
 void render_trace_frame(long long) {}
 RenderFrameStamp render_frame_trace_begin() { return {}; }
@@ -84,6 +88,8 @@ void client_settings_get_modules(bool* sprint, bool* blur, int* strength) {
 void client_settings_set_modules(bool, bool, int) {}
 void client_settings_get_fps_limit(bool* enabled, int* limit) { *enabled = false; *limit = 120; }
 void client_settings_set_fps_limit(bool, int) {}
+bool client_settings_get_fps_native() { return false; }
+void client_settings_set_fps_native(bool) {}
 void client_settings_get_blur(bool* average, int* hz, bool* screen) {
     *average = false; *hz = 60; *screen = false;
 }
@@ -114,6 +120,10 @@ bool custom_menu_on_keyboard(int key, int action) {
 void custom_menu_register_mouse_callback(GameWindowHandle*) {}
 void custom_menu_render() {}
 const char* fps_limiter_error() { return nullptr; }
+void fps_limiter_init(bool enabled) { assert(!enabled); }
+bool fps_limiter_native_supported() { return false; }
+static bool nativeLimitActive;
+void fps_limiter_native_update(bool enabled, int) { nativeLimitActive = enabled; }
 void fps_limiter_wait(bool enabled, bool active, int) { fpsActive = enabled && active; }
 long long fps_limiter_frame_timestamp_ns() { return 1; }
 long long fps_limiter_frame_delta_ns() { return 0; }
@@ -322,6 +332,22 @@ int main() {
     assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 2);
     hasFocus = true; locked = false;
     assert(!mouseButton(nullptr, 0, 0, 2, 0) && pingClicks == 2);
+    client_set_fps_limit(false); client_set_fps_native(true);
+    locked = true; menuOpen = false; hasFocus = true; tick();
+    assert(!nativeLimitActive && !fpsActive);
+    client_set_fps_limit(true); tick(); assert(nativeLimitActive && fpsActive);
+    client_set_fps_native(false); tick(); assert(!nativeLimitActive && fpsActive);
+    assert(!client_jitter_enabled() && !client_jitter_active());
+    assert(client_jitter_sample_mode() == 0);
+    client_set_jitter_sample_mode(1); assert(client_jitter_sample_mode() == 1);
+    client_set_jitter_sample_mode(2); assert(client_jitter_sample_mode() == 2);
+    client_set_jitter_sample_mode(99); assert(client_jitter_sample_mode() == 2);
+    client_set_jitter_sample_mode(-1); assert(client_jitter_sample_mode() == 0);
+    client_set_jitter(true); assert(client_jitter_active());
+    menuOpen = true; assert(!client_jitter_active()); menuOpen = false;
+    hasFocus = false; tick(); assert(!client_jitter_active()); hasFocus = true; tick();
+    locked = false; assert(!client_jitter_active()); locked = true;
+    assert(client_jitter_active()); client_set_jitter(false); assert(!client_jitter_active());
     std::puts("PASS: zoom hold/rebind/scroll bounds/disable/focus/menu handling; L opens the custom-menu route, Escape closes it, and cursor/sprint state follows the menu; blur, FPS cap, and AutoGG keep running");
 }
 
@@ -333,3 +359,4 @@ void client_settings_set_fps_display(FpsDisplaySettings) {}
 void fps_display_render(bool, long long) {}
 
 bool display_layout_begin_frame() { return true; }
+DisplayViewport display_layout_viewport() { return {640,480}; }

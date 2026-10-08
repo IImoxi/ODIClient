@@ -24,10 +24,12 @@ extern "C" void* mcpelauncher_host_dlsym(void*, const char* name) {
     return nullptr;
 }
 void custom_font_set_opacity(float) {}
-void custom_font_set_mojangles(bool) {}
-int custom_font_text_width(const char* text, int size) { return std::strlen(text) * size / 2; }
+bool mojanglesSelected, measuredMojangles, drawnMojangles;
+void custom_font_set_mojangles(bool value) { mojanglesSelected = value; }
+int custom_font_text_width(const char* text, int size) { measuredMojangles = mojanglesSelected; return std::strlen(text) * size / 2; }
 bool custom_font_draw_left_color(const char*, int, int, int, float, float, float, int, int) { return true; }
 bool custom_font_draw_left(const char* text, int x, int top, int size, int, int) {
+    drawnMojangles = mojanglesSelected;
     drawn.push_back({text, x, top, size}); return true;
 }
 void render(bool focused, long long time) {
@@ -66,6 +68,12 @@ int main() {
         assert(draw.x == (corner % 2 ? 960 - 8 - width : 8));
         assert(draw.top == (corner / 2 ? 720 - 8 - size - 1 : 8));
     }
+    settings.mojangles = true;
+    render(true, t += 10000000);
+    assert(measuredMojangles && drawnMojangles && !mojanglesSelected);
+    settings.mojangles = false;
+    render(true, t += 10000000);
+    assert(!measuredMojangles && !drawnMojangles && !mojanglesSelected);
     settings.enabled = false;
     drawn.clear(); render(true, t);
     assert(drawn.empty() && !available);

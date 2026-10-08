@@ -27,7 +27,7 @@ constexpr int mousePress = 0;
 // ponytail: bounded registration; raise these limits when real modules need more.
 constexpr int tileCapacity = 36;
 constexpr int pageCapacity = 36;
-constexpr int pageItemCapacity = 16;
+constexpr int pageItemCapacity = 17;
 constexpr int tilesPerView = 9;
 constexpr int controlsPerView = 5;
 constexpr int gridColumns = 3;
@@ -134,7 +134,7 @@ ControlLayout layoutControls(const Page& page, int pageIndex, int requestedView)
         layout.multiline[index] = item.multiline;
         layout.lineSlots[index] = lines;
         layout.expanded[index] = item.type == pageDropdown && item.expanded;
-        if (layout.expanded[index]) totalPercent += 2 * menu_style::rowHeightPercent;
+        if (layout.expanded[index]) totalPercent += 2 * menu_style::dropdownButtonHeightPercent;
         totalPercent += (layout.descriptions[index] ? menu_style::descriptionRowStridePercent
                                                   : menu_style::rowStridePercent)
             + (lines - 1) * menu_style::textLineHeightPercent
@@ -340,12 +340,20 @@ void pageItemRect(unsigned int index, int screenHeight,
     height = panelHeight * (rowHeight
         + (fieldRows - 1) * menu_style::textLineHeightPercent) / 100;
     if (drawnControls.anchors[index]) height += panelHeight * menu_style::rowHeightPercent / 100;
-    if (drawnControls.expanded[index]) height += panelHeight * 2 * menu_style::rowHeightPercent / 100;
+    if (drawnControls.expanded[index]) height += 2 * (panelHeight * menu_style::dropdownButtonHeightPercent / 100);
     if (drawnControls.pageIndex >= 0 && drawnControls.parents[index] >= 0 && drawnControls.rows[index] >= 0) {
         int inset = panelWidth * 3 / 100;
         x += inset;
         width -= 2 * inset;
     }
+}
+
+void dropdownRect(unsigned int index, int screenHeight, int& x, int& top, int& width, int& height) {
+    pageItemRect(index, screenHeight, x, top, width, height);
+    x += width * 32 / 100;
+    width = width * 68 / 100;
+    height = panelHeight * menu_style::dropdownButtonHeightPercent / 100;
+    top += (panelHeight * menu_style::rowHeightPercent / 100 - height) / 2;
 }
 
 bool contains(double x, double y, int left, int top, int width, int height) {
@@ -583,6 +591,22 @@ bool handleMouseButton(double x, double y, int button, int action, MenuAction& p
     }
     draggingSlider = -1;
     if (settingsTransition.active && settingsTransition.exitPage >= 0) return true;
+    if (activePage >= 0 && activePage < static_cast<int>(pageCount)
+        && (button == leftMouseButton || button == rightMouseButton)) {
+        Page& page = pages[activePage];
+        for (unsigned int i = 0; i < page.itemCount; ++i) {
+            PageItem& item = page.items[i];
+            if (item.type != pageDropdown || !item.expanded) continue;
+            int left, top, width, height;
+            dropdownRect(i, lastScreenHeight, left, top, width, height);
+            bool current = drawnControls.pageIndex == activePage
+                && drawnControls.view == controlView && drawnControls.rows[i] >= 0;
+            if (!current || !contains(x, y, left, top, width, height * 3)) {
+                item.expanded = false;
+                return true;
+            }
+        }
+    }
     int contentTop = lastScreenHeight - panelY - panelHeight + panelHeight * menu_style::contentTopPercent / 100;
     bool inContent = contains(x, y, panelX, contentTop, panelWidth, panelHeight * 70 / 100);
     if (button == leftMouseButton && !inContent) { resetPageInput(); return true; }
@@ -624,11 +648,11 @@ bool handleMouseButton(double x, double y, int button, int action, MenuAction& p
             }
             else if (item.type == pageButton) pending.click = item.onClick;
             else if (item.type == pageDropdown) {
-                int rowHeight = panelHeight * menu_style::rowHeightPercent / 100;
-                if (x < left + width * 32 / 100) break;
-                if (drawnControls.expanded[i] && y >= top + rowHeight) {
+                dropdownRect(i, lastScreenHeight, left, top, width, height);
+                if (!contains(x, y, left, top, width, height * (drawnControls.expanded[i] ? 3 : 1))) break;
+                if (drawnControls.expanded[i] && y >= top + height) {
                     pending.toggle = item.onToggle;
-                    pending.value = y >= top + 2 * rowHeight;
+                    pending.value = y >= top + 2 * height;
                     item.expanded = false;
                 } else {
                     bool expand = !item.expanded;
@@ -1240,7 +1264,8 @@ MenuColor blendButtonColor(MenuColor from, MenuColor to, float amount) {
 }
 
 void drawButton(const MenuFrame& frame, int id, int x, int top, int width, int height,
-                int screenHeight, float radius, bool settings = false, bool enabled = false) {
+                int screenHeight, float radius, bool settings = false, bool enabled = false,
+                bool dropdown = false) {
     int slot = id < 100 ? id : (id < 200 ? id - 100 : pageItemCapacity + id - 200);
     ButtonMotion& motion = buttonMotions[settings ? frame.pageIndex + 1 : 0][slot];
     updateButtonMotion(motion, frame.hovered == id, enabled, fps_limiter_frame_timestamp_ns());
@@ -1253,11 +1278,16 @@ void drawButton(const MenuFrame& frame, int id, int x, int top, int width, int h
         + (menu_style::enabledButtonOpacity - menu_style::buttonOpacity) * motion.enabled;
     float hoverOpacity = menu_style::hoverButtonOpacity
         + (menu_style::enabledHoverButtonOpacity - menu_style::hoverButtonOpacity) * motion.enabled;
+    if (dropdown) {
+        opacity = menu_style::dropdownButtonOpacity
+            + (menu_style::dropdownSelectedOpacity - menu_style::dropdownButtonOpacity) * motion.enabled;
+        hoverOpacity = menu_style::dropdownHoverOpacity;
+    }
     opacity += (hoverOpacity - opacity) * motion.hover;
     drawSurface(x, top, width, height, screenHeight, color, radius,
                 0.0f, 1.0f, 0.0f, opacity);
     float thickness = settings ? menu_style::settingsButtonOutlineThickness : menu_style::mainButtonOutlineThickness;
-    if (thickness > 0.0f) {
+    if (!dropdown && thickness > 0.0f) {
         MenuColor outline = blendButtonColor(
             settings ? menu_style::settingsButtonOutline : menu_style::mainButtonOutline,
             settings ? menu_style::settingsButtonEnabledOutline : menu_style::mainButtonEnabledOutline,
@@ -1265,6 +1295,26 @@ void drawButton(const MenuFrame& frame, int id, int x, int top, int width, int h
         drawSurface(x, top, width, height, screenHeight, outline, radius, thickness,
                     1.0f, 0.0f, settings ? menu_style::settingsButtonOutlineOpacity : menu_style::buttonOutlineOpacity);
     }
+}
+
+// Clip one continuous rounded inner surface into adjoining dropdown rows.
+void drawDropdownRow(const MenuFrame& frame, int id, int x, int top, int width,
+                     int surfaceHeight, int rowTop, int rowHeight, int screenHeight,
+                     float radius, bool selected = false) {
+    GLint clip[4];
+    menuGetIntegerv(GL_SCISSOR_BOX, clip);
+    int left = x > clip[0] ? x : clip[0];
+    int bottom = screenHeight - rowTop - rowHeight;
+    if (bottom < clip[1]) bottom = clip[1];
+    int right = x + width < clip[0] + clip[2] ? x + width : clip[0] + clip[2];
+    int upper = screenHeight - rowTop;
+    if (upper > clip[1] + clip[3]) upper = clip[1] + clip[3];
+    menuScissor(left, bottom, right > left ? right - left : 0, upper > bottom ? upper - bottom : 0);
+    int border = static_cast<int>(menu_style::settingsButtonOutlineThickness + 0.5f);
+    float innerRadius = radius > border ? radius - border : 0.0f;
+    drawButton(frame, id, x + border, top + border, width - 2 * border,
+               surfaceHeight - 2 * border, screenHeight, innerRadius, true, selected, true);
+    menuScissor(clip[0], clip[1], clip[2], clip[3]);
 }
 
 // Render-thread text context: all page controls use settled glyphs during transitions.
@@ -1571,26 +1621,51 @@ void drawPageControls(const MenuFrame& frame, int screenWidth, int screenHeight,
         } else if (item.type == pageDropdown) {
             int rowHeight = panelHeight * menu_style::rowHeightPercent / 100;
             int selectX = x + width * 32 / 100, selectWidth = width * 68 / 100;
+            int buttonHeight, buttonTop;
+            dropdownRect(i, screenHeight, selectX, buttonTop, selectWidth, buttonHeight);
+            int inset = static_cast<int>(menu_style::settingsButtonOutlineThickness + 0.5f);
+            int padding = static_cast<int>(panelHeight * menu_style::dropdownTextPaddingPercent / 100);
+            float radius = panelHeight * menu_style::dropdownRadiusPercent / 100.0f;
+            int surfaceHeight = buttonHeight * (item.expanded ? 3 : 1);
+            drawSurface(selectX, buttonTop, selectWidth, surfaceHeight, screenHeight,
+                        menu_style::textBoxBackground, radius, 0.0f, 1.0f, 0.0f,
+                        menu_style::textBoxBackgroundOpacity);
             drawLabel(item.label, x, top, width * 30 / 100, rowHeight,
                       fontHeight, screenWidth, screenHeight, false);
-            drawButton(frame, 100 + i, selectX, top, selectWidth, rowHeight, screenHeight,
-                       panelHeight * menu_style::settingsChoiceRadiusPercent / 100.0f, true);
-            drawLabel(item.choices[frame.controls.enabled[i] ? 1 : 0], selectX, top,
-                      selectWidth * 85 / 100, rowHeight, fontHeight, screenWidth, screenHeight);
-            drawLabel(item.expanded ? "^" : "v", selectX + selectWidth * 85 / 100, top,
-                      selectWidth * 15 / 100, rowHeight, fontHeight, screenWidth, screenHeight);
+            drawDropdownRow(frame, 100 + i, selectX, buttonTop, selectWidth,
+                            surfaceHeight, buttonTop, buttonHeight, screenHeight, radius);
+            drawLabel(item.choices[frame.controls.enabled[i] ? 1 : 0], selectX + padding, buttonTop,
+                      selectWidth - 3 * padding, buttonHeight, fontHeight, screenWidth, screenHeight, false);
+            int arrowSize = static_cast<int>(panelHeight * menu_style::dropdownArrowSizePercent / 100);
+            if (arrowSize < 2) arrowSize = 2;
+            int thickness = static_cast<int>(panelHeight * menu_style::dropdownArrowThicknessPercent / 100);
+            if (thickness < 1) thickness = 1;
+            int arrowX = selectX + selectWidth - padding - arrowSize;
+            int arrowTop = buttonTop + (buttonHeight - arrowSize / 2 - thickness) / 2;
+            for (int pixel = 0; pixel <= arrowSize; ++pixel) {
+                int rise = pixel <= arrowSize / 2 ? pixel : arrowSize - pixel;
+                int y = item.expanded ? arrowSize / 2 - rise : rise;
+                drawSurface(arrowX + pixel, arrowTop + y, thickness, thickness,
+                            screenHeight, menu_style::text, thickness / 2.0f);
+            }
             if (item.expanded) {
-                drawSurface(selectX, top + rowHeight, selectWidth, 2 * rowHeight,
-                            screenHeight, menu_style::background,
-                            panelHeight * menu_style::settingsChoiceRadiusPercent / 100.0f);
+                draw_gl_divider(selectX + inset, screenHeight - buttonTop - buttonHeight,
+                                selectWidth - 2 * inset,
+                                menuOpacity * menu_style::settingsDividerOpacity, clippingContent);
                 for (int option = 0; option < 2; ++option) {
-                    drawButton(frame, 200 + i * 2 + option, selectX, top + (option + 1) * rowHeight,
-                               selectWidth, rowHeight, screenHeight, 0.0f, true,
-                               frame.controls.enabled[i] == static_cast<bool>(option));
-                    drawLabel(item.choices[option], selectX, top + (option + 1) * rowHeight,
-                              selectWidth, rowHeight, fontHeight, screenWidth, screenHeight);
+                    int optionTop = buttonTop + (option + 1) * buttonHeight;
+                    drawDropdownRow(frame, 200 + i * 2 + option, selectX, buttonTop,
+                                    selectWidth, surfaceHeight, optionTop, buttonHeight,
+                                    screenHeight, radius,
+                                    frame.controls.enabled[i] == static_cast<bool>(option));
+                    drawLabel(item.choices[option], selectX + padding, optionTop,
+                              selectWidth - 2 * padding, buttonHeight, fontHeight, screenWidth, screenHeight, false);
                 }
             }
+            drawSurface(selectX, buttonTop, selectWidth, surfaceHeight, screenHeight,
+                        menu_style::settingsButtonOutline, radius,
+                        menu_style::settingsButtonOutlineThickness, 1.0f, 0.0f,
+                        menu_style::settingsButtonOutlineOpacity);
         } else if (item.type == pageChoice) {
             drawLabel(item.label, x, top, width * 30 / 100, height,
                       fontHeight, screenWidth, screenHeight, false);
@@ -1826,6 +1901,14 @@ void custom_menu_render() {
                         && contains(frame.cursorX, frame.cursorY, x, top, width, height)) {
                         frame.hovered = 100 + i;
                         break;
+                    }
+                    if (type == pageDropdown) {
+                        dropdownRect(i, screenHeight, x, top, width, height);
+                        int rows = frame.controls.expanded[i] ? 3 : 1;
+                        if (contains(frame.cursorX, frame.cursorY, x, top, width, rows * height)) {
+                            int option = static_cast<int>((frame.cursorY - top) / height) - 1;
+                            frame.hovered = option < 0 ? 100 + i : 200 + i * 2 + option;
+                        }
                     }
                     if (type == pageChoice) for (int option = 0; option < 2; ++option) {
                         int optionX = x + width * (32 + option * 34) / 100;

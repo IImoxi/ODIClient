@@ -65,6 +65,7 @@ int savedBlurStrength = 30;
 bool savedBlurFpsAverage, savedScreenBlur;
 int savedBlurAverageHz = 60;
 bool savedFpsLimitEnabled;
+bool savedFpsNative;
 int savedFpsLimit = 120;
 const char* blockedReason = "AutoGG: waiting for gameplay";
 unsigned long gameBase;
@@ -705,7 +706,7 @@ void loadConfig() {
         migrating = file != nullptr;
     }
     if (!file) return;
-    char lines[53][512]{};
+    char lines[64][512]{};
     bool complete = true;
     for (int i = 0; i < 4; ++i) {
         auto& line = lines[i];
@@ -721,6 +722,20 @@ void loadConfig() {
     bool version23 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG23");
     bool version24 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG24");
     bool version25 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG25");
+    bool version26 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG26");
+    bool version27 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG27");
+    bool version28 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG28");
+    bool version29 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG29");
+    bool version30 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG30");
+    bool version31 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG31");
+    bool version32 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG32");
+    version31 = version31 || version32;
+    version30 = version30 || version31;
+    version29 = version29 || version30;
+    version28 = version28 || version29;
+    version27 = version27 || version28;
+    version26 = version26 || version27;
+    version25 = version25 || version26;
     version24 = version24 || version25;
     version23 = version23 || version24;
     bool version22 = complete && length(lines[0]) == 8 && contains(lines[0], "AUTOGG22");
@@ -913,7 +928,8 @@ void loadConfig() {
             if (length(lines[i]) != 1 || (lines[i][0] != '0' && lines[i][0] != '1')) complete = false;
         }
         environment.sky = lines[47][0] == '1';
-        environment.clouds = lines[48][0] == '1';
+        // Older files contain an ignored cloud slot; opt in to the new renderer.
+        environment.clouds = version31 && lines[48][0] == '1';
         environment.vanillaCelestials = lines[49][0] == '1';
     }
     if (version25) {
@@ -926,6 +942,64 @@ void loadConfig() {
         environment.skyLookup = lines[50][0] == '1';
         environment.skyHalfResolution = lines[51][0] == '1';
         environment.skyReducedSamples = lines[52][0] == '1';
+    }
+    if (version26) {
+        if (!getLine(lines[53], sizeof(lines[53]), file)) complete = false;
+        unsigned long n = length(lines[53]);
+        if (n && lines[53][n - 1] == '\n') lines[53][--n] = 0;
+        if (length(lines[53]) != 1 || (lines[53][0] != '0' && lines[53][0] != '1')) complete = false;
+    }
+    if (version27) {
+        for (int i = 54; i < 56; ++i) {
+            if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+            unsigned long n = length(lines[i]);
+            if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+        }
+        if (length(lines[54]) != 1 || (lines[54][0] != '0' && lines[54][0] != '1')) complete = false;
+        environment.weather = lines[54][0] == '1';
+        environment.weatherAmount = parseRange(lines[55], 0, 100);
+        if (environment.weatherAmount < 0) complete = false;
+    }
+    if (version28) {
+        if (!getLine(lines[56], sizeof(lines[56]), file)) complete = false;
+        unsigned long n = length(lines[56]);
+        if (n && lines[56][n - 1] == '\n') lines[56][--n] = 0;
+        if (length(lines[56]) != 1 || (lines[56][0] != '0' && lines[56][0] != '1')) complete = false;
+    }
+    if (version29) {
+        if (!getLine(lines[57], sizeof(lines[57]), file)) complete = false;
+        unsigned long n = length(lines[57]);
+        if (n && lines[57][n - 1] == '\n') lines[57][--n] = 0;
+        if (length(lines[57]) != 1 || (lines[57][0] != '0' && lines[57][0] != '1')) complete = false;
+    }
+    // Read retired adaptive slots only to preserve config compatibility.
+    if (version30) {
+        for (int i = 58; i < 60; ++i) {
+            if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+            unsigned long n = length(lines[i]);
+            if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+        }
+        if (length(lines[58]) != 1 || (lines[58][0] != '0' && lines[58][0] != '1')) complete = false;
+        if (parseRange(lines[59], 1, 20) < 0) complete = false;
+    }
+    if (version31) {
+        for (int i = 60; i < 63; ++i) {
+            if (!getLine(lines[i], sizeof(lines[i]), file)) { complete = false; break; }
+            unsigned long n = length(lines[i]);
+            if (n && lines[i][n - 1] == '\n') lines[i][--n] = 0;
+        }
+        environment.cloudDetail = parseRange(lines[60], 1, 3);
+        environment.cloudSamples = parseRange(lines[61], 8, 64);
+        environment.cloudResolution = parseRange(lines[62], 0, 2);
+        if (environment.cloudDetail < 1 || environment.cloudSamples < 8
+            || environment.cloudSamples % 8 || environment.cloudResolution < 0) complete = false;
+    }
+    if (version32) {
+        if (!getLine(lines[63], sizeof(lines[63]), file)) complete = false;
+        unsigned long n = length(lines[63]);
+        if (n && lines[63][n - 1] == '\n') lines[63][--n] = 0;
+        if (length(lines[63]) != 1 || (lines[63][0] != '0' && lines[63][0] != '1')) complete = false;
+        environment.skyQuarterResolution = lines[63][0] == '1';
     }
     int fpsInterval = version19 ? parseRange(lines[34], version20 ? 250 : 100, version20 ? 2000 : 5000) : 1000;
     int fpsScale = version20 ? parseRange(lines[35], 0, ui_scale::count - 1) : 2;
@@ -1004,18 +1078,19 @@ void loadConfig() {
         if (fpsInterval < 250) fpsInterval = 250;
         if (fpsInterval > 2000) fpsInterval = 2000;
         fpsInterval = (fpsInterval + 125) / 250 * 250;
-        savedFpsDisplay = {version19 && lines[32][0] == '1', version19 && lines[33][0] == '1', fpsInterval, fpsScale, fpsAnchor};
+        savedFpsDisplay = {version19 && lines[32][0] == '1', version19 && lines[33][0] == '1', fpsInterval, fpsScale, fpsAnchor, version26 && lines[53][0] == '1'};
         savedEnvironment = environment;
         savedCCUtils = {version22 && lines[44][0] == '1', version22 && lines[45][0] == '1',
                         version23 && lines[46][0] == '1'};
-        if (migrating || !version25) dirty = true;
+        savedFpsNative = version28 && lines[56][0] == '1';
+        if (migrating || !version32 || lines[58][0] != '0' || parseRange(lines[59], 1, 20) != 5) dirty = true;
     } else setStatus("AutoGG settings invalid; using defaults");
     closeFile(file);
 }
 void saveConfig() {
     char savedTrigger[256], savedResponse[256];
     bool centerCursor, tablist, particles, tablistMojangles;
-    bool savedEnabled, sprint, blur, fpsLimitEnabled, blurFpsAverage, screenBlur;
+    bool savedEnabled, sprint, blur, fpsLimitEnabled, fpsNative, blurFpsAverage, screenBlur;
     int strength, fpsLimit, averageHz, zoomKey, zoomDefault, zoomScroll;
     bool zoom;
     RenderSettings render;
@@ -1038,6 +1113,7 @@ void saveConfig() {
         zoom = savedZoom; zoomKey = savedZoomKey; zoomDefault = savedZoomDefault; zoomScroll = savedZoomScroll;
         sprint = savedSprint; blur = savedBlur; strength = savedBlurStrength;
         fpsLimitEnabled = savedFpsLimitEnabled; fpsLimit = savedFpsLimit;
+        fpsNative = savedFpsNative;
         blurFpsAverage = savedBlurFpsAverage; averageHz = savedBlurAverageHz;
         screenBlur = savedScreenBlur;
         copy(savedTrigger, trigger, sizeof(savedTrigger)); copy(savedResponse, response, sizeof(savedResponse));
@@ -1048,7 +1124,7 @@ void saveConfig() {
     FILE* file = openFile(temporary, "w");
     if (!file) { setStatus("AutoGG settings could not be saved"); return; }
     char flag[] = {savedEnabled ? '1' : '0', '\n'};
-    bool ok = writeFile("AUTOGG25\n", 1, 9, file) == 9 && writeFile(flag, 1, 2, file) == 2;
+    bool ok = writeFile("AUTOGG32\n", 1, 9, file) == 9 && writeFile(flag, 1, 2, file) == 2;
     const char* texts[] = {savedTrigger, savedResponse};
     for (const char* text : texts) {
         unsigned long n = length(text);
@@ -1149,6 +1225,27 @@ void saveConfig() {
                        environment.skyHalfResolution ? '1' : '0', '\n',
                        environment.skyReducedSamples ? '1' : '0', '\n'};
     ok = writeFile(skyFlags, 1, sizeof(skyFlags), file) == sizeof(skyFlags) && ok;
+    char displayFont[] = {fpsDisplay.mojangles ? '1' : '0', '\n'};
+    ok = writeFile(displayFont, 1, sizeof(displayFont), file) == sizeof(displayFont) && ok;
+    char weatherFlag[] = {environment.weather ? '1' : '0', '\n'};
+    ok = writeFile(weatherFlag, 1, sizeof(weatherFlag), file) == sizeof(weatherFlag) && ok;
+    char weatherLine[5];
+    unsigned long weatherLength = formatIntLine(environment.weatherAmount, weatherLine);
+    ok = writeFile(weatherLine, 1, weatherLength, file) == weatherLength && ok;
+    char nativeFlag[] = {fpsNative ? '1' : '0', '\n'};
+    ok = writeFile(nativeFlag, 1, sizeof(nativeFlag), file) == sizeof(nativeFlag) && ok;
+    // Retain the removed GPU pacing slot for config migration.
+    ok = writeFile("0\n", 1, 2, file) == 2 && ok;
+    // Preserve retired adaptive slots as disabled for older config readers.
+    ok = writeFile("0\n5\n", 1, 4, file) == 4 && ok;
+    const int cloudValues[] = {environment.cloudDetail, environment.cloudSamples, environment.cloudResolution};
+    for (int value : cloudValues) {
+        char line[7];
+        unsigned long n = formatIntLine(value, line);
+        ok = writeFile(line, 1, n, file) == n && ok;
+    }
+    char skyResolutionFlag[] = {environment.skyQuarterResolution ? '1' : '0', '\n'};
+    ok = writeFile(skyResolutionFlag, 1, sizeof(skyResolutionFlag), file) == sizeof(skyResolutionFlag) && ok;
     ok = closeFile(file) == 0 && ok;
     if (!ok || renameFile(temporary, configPath) != 0) setStatus("AutoGG settings could not be saved");
 
@@ -1238,6 +1335,12 @@ void client_settings_get_fps_limit(bool* fpsEnabled, int* fpsLimit) {
     Lock lock;
     *fpsEnabled = savedFpsLimitEnabled;
     *fpsLimit = savedFpsLimit;
+}
+bool client_settings_get_fps_native() { Lock lock; return savedFpsNative; }
+void client_settings_set_fps_native(bool value) {
+    Lock lock;
+    if (savedFpsNative != value) dirty = true;
+    savedFpsNative = value;
 }
 void client_settings_set_fps_limit(bool fpsEnabled, int fpsLimit) {
     if (fpsLimit < 30) fpsLimit = 30;
@@ -1502,12 +1605,21 @@ void client_settings_set_fps_display(FpsDisplaySettings settings) {
     Lock lock;
     if (savedFpsDisplay.enabled != settings.enabled || savedFpsDisplay.low != settings.low
         || savedFpsDisplay.intervalMs != settings.intervalMs || savedFpsDisplay.fontScale != settings.fontScale
-        || savedFpsDisplay.anchor != settings.anchor) dirty = true;
+        || savedFpsDisplay.anchor != settings.anchor || savedFpsDisplay.mojangles != settings.mojangles) dirty = true;
     savedFpsDisplay = settings;
 }
 
 EnvironmentSettings client_settings_get_environment() { Lock lock; return savedEnvironment; }
 void client_settings_set_environment(EnvironmentSettings settings) {
+    if (settings.cloudDetail < 1) settings.cloudDetail = 1;
+    if (settings.cloudDetail > 3) settings.cloudDetail = 3;
+    if (settings.cloudSamples < 8) settings.cloudSamples = 8;
+    if (settings.cloudSamples > 64) settings.cloudSamples = 64;
+    settings.cloudSamples = (settings.cloudSamples + 4) / 8 * 8;
+    if (settings.cloudResolution < 0) settings.cloudResolution = 0;
+    if (settings.cloudResolution > 2) settings.cloudResolution = 2;
+    if (settings.weatherAmount < 0) settings.weatherAmount = 0;
+    if (settings.weatherAmount > 100) settings.weatherAmount = 100;
     if (settings.ticks < 0) settings.ticks = 0;
     if (settings.ticks > 23999) settings.ticks = 23999;
     if (settings.hue < 0) settings.hue = 0;
@@ -1525,6 +1637,12 @@ void client_settings_set_environment(EnvironmentSettings settings) {
         || savedEnvironment.vanillaCelestials != settings.vanillaCelestials
         || savedEnvironment.skyLookup != settings.skyLookup
         || savedEnvironment.skyHalfResolution != settings.skyHalfResolution
-        || savedEnvironment.skyReducedSamples != settings.skyReducedSamples) dirty = true;
+        || savedEnvironment.skyReducedSamples != settings.skyReducedSamples
+        || savedEnvironment.weather != settings.weather
+        || savedEnvironment.weatherAmount != settings.weatherAmount
+        || savedEnvironment.cloudDetail != settings.cloudDetail
+        || savedEnvironment.cloudSamples != settings.cloudSamples
+        || savedEnvironment.cloudResolution != settings.cloudResolution
+        || savedEnvironment.skyQuarterResolution != settings.skyQuarterResolution) dirty = true;
     savedEnvironment = settings;
 }

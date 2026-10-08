@@ -79,11 +79,15 @@ void fps_display_render(bool focused, long long frameNs) {
     }
     DisplayPosition position;
     // Include the shadow pixel in the claimed bounds.
+    custom_font_set_mojangles(settings.mojangles);
     int width = custom_font_text_width(text, size) + 1;
-    if (!display_layout_place(static_cast<DisplayAnchor>(settings.anchor), width, size + 1, position)) return;
+    if (!display_layout_place(static_cast<DisplayAnchor>(settings.anchor), width, size + 1, position)) {
+        custom_font_set_mojangles(false);
+        return;
+    }
     custom_font_set_opacity(1);
-    custom_font_set_mojangles(false);
     custom_font_draw_left_color(text, position.x + 1, position.top + 1, size, 0, 0, 0,
                                 viewport.width, viewport.height);
     custom_font_draw_left(text, position.x, position.top, size, viewport.width, viewport.height);
+    custom_font_set_mojangles(false);
 }

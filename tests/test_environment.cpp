@@ -16,6 +16,14 @@ float receivedPartial;
 float nativeAngle(void*, int ticks, float partial) {
     receivedTicks = ticks; receivedPartial = partial; return 0.25f;
 }
+float seenRain, seenThunder;
+void nativeWeatherTick(void* weather) {
+    seenRain = weatherField<float>(weather, 0x38);
+    seenThunder = weatherField<float>(weather, 0x44);
+    ++weatherField<int>(weather, 0x30);
+    weatherField<float>(weather, 0x34) = seenRain;
+    weatherField<float>(weather, 0x40) = seenThunder;
+}
 int main() {
     originals[0] = originals[1] = originals[2] = nativeFog;
     originalAngle = nativeAngle;
@@ -48,6 +56,61 @@ int main() {
     client_set_environment_saturation(-1);
     assert(saved.ticks == 0 && saved.hue == 360 && saved.value == 100 && saved.saturation == 0);
     assert(!saved.enabled && saved.time && saved.fog);
+    client_set_environment_clouds(true);
+    assert(!client_environment_sky_quarter_resolution());
+    client_set_environment_sky_quarter_resolution(true);
+    assert(client_environment_sky_quarter_resolution() && saved.skyQuarterResolution);
+    client_set_environment_sky_quarter_resolution(false);
+    assert(!client_environment_sky_quarter_resolution() && !saved.skyQuarterResolution);
+    client_set_environment_cloud_detail(3); client_set_environment_cloud_samples(64); client_set_environment_cloud_resolution(2);
+    assert(saved.clouds && saved.cloudDetail == 3 && saved.cloudSamples == 64 && saved.cloudResolution == 2);
+    assert(pack(settings(snapshot())) == snapshot());
+    client_set_environment_cloud_detail(-1); client_set_environment_cloud_samples(-1); client_set_environment_cloud_resolution(-1);
+    assert(saved.cloudDetail == 1 && saved.cloudSamples == 8 && saved.cloudResolution == 0);
+    client_set_environment_cloud_detail(99); client_set_environment_cloud_samples(999); client_set_environment_cloud_resolution(999);
+    assert(saved.cloudDetail == 3 && saved.cloudSamples == 64 && saved.cloudResolution == 2);
+    client_set_environment_cloud_samples(29); assert(saved.cloudSamples == 32);
+    client_set_environment_clouds(false); assert(!saved.clouds);
+
+    // Native interpolation is restored before forwarding, and server worlds
+    // never receive the override. New packet values supersede our snapshot.
+    alignas(8) unsigned char weatherObject[0x68]{}, dimensionObject[0x1c0]{}, levelObject[8]{};
+    weatherField<void*>(weatherObject, 0x58) = dimensionObject;
+    weatherField<void*>(dimensionObject, 0xa0) = levelObject;
+    weatherField<unsigned long>(dimensionObject, 0) = profile::fogTables[0];
+    weatherField<unsigned long>(levelObject, 0) = profile::weatherClientLevelTable;
+    originalWeatherTick = nativeWeatherTick;
+    weatherField<float>(weatherObject, 0x38) = 0.2f;
+    weatherField<float>(weatherObject, 0x44) = 0.1f;
+    client_set_environment_weather(true); client_set_environment_weather_amount(75);
+    weatherTick(weatherObject); assert(seenRain == 0.2f && seenThunder == 0.1f);
+    assert(weatherField<float>(weatherObject, 0x38) == 0.2f); // Module OFF.
+    client_set_environment(true);
+    for (int amount : {0, 25, 50, 75, 100}) {
+        client_set_environment_weather_amount(amount);
+        auto levels = environment_weather();
+        assert(levels.rain == (amount < 50 ? amount * 2 : 100) / 100.0f);
+        assert(levels.thunder == (amount > 50 ? (amount - 50) * 2 : 0) / 100.0f);
+        weatherTick(weatherObject);
+        assert(seenRain == 0.2f && seenThunder == 0.1f);
+        assert(weatherField<float>(weatherObject, 0x38) == levels.rain);
+        assert(weatherField<float>(weatherObject, 0x44) == levels.thunder);
+    }
+    weatherField<float>(weatherObject, 0x38) = 0.3f; // Fresh native/packet change.
+    weatherTick(weatherObject); assert(seenRain == 0.3f);
+    client_set_environment_weather(false); weatherTick(weatherObject);
+    assert(weatherField<float>(weatherObject, 0x38) == 0.3f);
+    assert(weatherField<float>(weatherObject, 0x44) == 0.1f);
+    client_set_environment_weather(true); client_set_environment_weather_amount(100);
+    weatherField<unsigned long>(levelObject, 0) = 0; // Server Level.
+    weatherTick(weatherObject);
+    assert(weatherField<float>(weatherObject, 0x38) == 0.3f);
+    weatherField<unsigned long>(levelObject, 0) = profile::weatherClientLevelTable;
+    weatherTick(weatherObject);
+    client_set_environment(false); weatherTick(weatherObject);
+    assert(weatherField<float>(weatherObject, 0x38) == 0.3f);
+    client_set_environment_weather_amount(-1); assert(saved.weatherAmount == 0);
+    client_set_environment_weather_amount(101); assert(saved.weatherAmount == 100);
 
     // Installation checks the exact build, native callers and every patched slot.
     assert(hooks::initialize());
@@ -66,6 +129,11 @@ int main() {
     const unsigned long sizes[] = {sizeof(profile::fogOverworldSignature), sizeof(profile::fogPassthroughSignature),
         sizeof(profile::angleEntrySignature), sizeof(profile::fogCallerSignature), sizeof(profile::angleCallerSignature)};
     for (int i = 0; i < 5; ++i) std::memcpy(image + sites[i], signatures[i], sizes[i]);
+    std::memcpy(image + profile::weatherTickFunction, profile::weatherTickSignature, sizeof(profile::weatherTickSignature));
+    std::memcpy(image + profile::weatherClientCheck, profile::weatherClientSignature, sizeof(profile::weatherClientSignature));
+    std::memcpy(image + profile::weatherInterpolation, profile::weatherInterpolationSignature, sizeof(profile::weatherInterpolationSignature));
+    const unsigned char tickReturn[] = {0x58, 0x5b, 0x5d, 0xc3};
+    std::memcpy(image + profile::weatherTickFunction + sizeof(profile::weatherTickSignature), tickReturn, sizeof(tickReturn));
     auto slot = [&](unsigned long offset) -> unsigned long& {
         return *reinterpret_cast<unsigned long*>(image + offset);
     };
@@ -88,12 +156,28 @@ int main() {
     for (auto site : sites) rejected(site);
     for (auto table : profile::fogTables) rejected(table + profile::fogSlot);
     rejected(profile::fogTables[0] + profile::angleSlot);
+    rejected(profile::weatherTickFunction);
+    rejected(profile::weatherClientCheck);
+    rejected(profile::weatherInterpolation);
     assert(install(base));
     assert(originalAngle == reinterpret_cast<Angle>(base + profile::angleFunction));
     assert(slot(profile::fogTables[0] + profile::angleSlot) == reinterpret_cast<unsigned long>(&angle));
     assert(slot(profile::fogTables[0] + profile::fogSlot) == reinterpret_cast<unsigned long>(&fog<0>));
     assert(slot(profile::fogTables[1] + profile::fogSlot) == reinterpret_cast<unsigned long>(&fog<1>));
     assert(slot(profile::fogTables[2] + profile::fogSlot) == reinterpret_cast<unsigned long>(&fog<2>));
+    // Execute the installed branch and stolen-instruction trampoline.
+    weatherField<unsigned long>(dimensionObject, 0) = base + profile::fogTables[0];
+    weatherField<unsigned long>(levelObject, 0) = base + profile::weatherClientLevelTable;
+    weatherHistory = {};
+    client_set_environment(true); client_set_environment_weather(true);
+    client_set_environment_weather_amount(75);
+    auto installedTick = reinterpret_cast<WeatherTick>(base + profile::weatherTickFunction);
+    installedTick(weatherObject);
+    assert(weatherField<float>(weatherObject, 0x38) == 1.0f);
+    assert(weatherField<float>(weatherObject, 0x44) == 0.5f);
+    client_set_environment_weather(false); installedTick(weatherObject);
+    assert(weatherField<float>(weatherObject, 0x38) == 0.3f);
+    assert(weatherField<float>(weatherObject, 0x44) == 0.1f);
     assert(munmap(image, size) == 0);
 
 }

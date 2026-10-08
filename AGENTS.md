@@ -11,6 +11,23 @@ instructions. Keep this map current when architecture, files, or commands change
 
 ## Current behavior and platform
 
+- **Jitter Anti-Aliasing** is an experimental, unsaved default-OFF module. A build/PLT-gated
+  `glUniformMatrix4fv` import wrapper cycles 2/4/8 subpixel projection positions
+  per completed frame, without frame history or blending. Its unsaved Samples
+  slider defaults to 2 (the original ±¼-pixel diagonal pair). Four samples cover
+  the quarter-pixel square; eight use a centered dispersed pattern within ±7/16
+  pixel. Mode/phase are captured together per frame. Only focused
+  gameplay, full-window viewports and the default draw framebuffer are supported;
+  other paths forward unchanged. It selects one live `u_proj`, `u_viewProj` or
+  `u_modelViewProj` location per program and preserves native input matrices,
+  depth/w, affine HUD matrices, model/view matrices and inverse matrices.
+  Controls reset after restart. GLES raster/hook checks pass; native routing,
+  query overhead and higher-sample appearance still need in-game verification.
+  The owner reports that the original two-sample effect looks good in game.
+  Beneath Samples, the selected mode shows owner-tested recommendations for
+  avoiding visible flicker: 2 samples at 120 Hz+/120 FPS+, 4 at 165 Hz+/165 FPS+,
+  and 8 at 360 Hz+/360 FPS+.
+
 - The shared `popup.h` API accepts copied title/message and an optional answer
   callback, and supports one pending prompt. Hold left click for one second for Yes or
   right click for one second for No; both show the skin-download progress ring.
@@ -65,7 +82,15 @@ instructions. Keep this map current when architecture, files, or commands change
   blocks, and air swings are excluded. No actor pointers survive the callback.
   Uses the exact Minecraft profile and shared hook manager; appearance needs
   in-game verification.
-- **Environment** defaults OFF with saved Time changer and Fog color toggles.
+- **Environment** defaults OFF with saved Weather changer, Time changer and Fog color toggles.
+  Weather uses 0–100 in steps of 10 (default 0): clear at 0, full rain at 50, full thunder
+  at 100, blending intensity between them. An exact-build Weather tick hook
+  overrides only client Overworld rain/thunder interpolation; native targets,
+  LevelData and server dimensions remain unchanged. Native interpolation is
+  restored before each tick and on the next tick after disabling. Biome rain/snow
+  remains native; no server lightning strikes are created. Only numeric identities
+  and copied scalar levels survive callbacks; one live client Overworld is supported.
+  In-game appearance/sound need verification.
   Time uses 0–23999 ticks (default 6000) to override the Overworld celestial-angle
   calculation without changing world/server time. Fog overrides the native Dimension
   fog RGB in Overworld, Nether and End using Hue 0–360, Saturation/Value 0–100
@@ -76,16 +101,38 @@ instructions. Keep this map current when architecture, files, or commands change
   matrix. Its own single-scattering atmosphere, sun, moon and stars replace the native celestial draws only after a replacement in the same
   frame/context. Native mesh colors and clear color are untouched. The sky
   forwards native sun/moon draws when the saved Vanilla sun/moon child
-  toggle is ON (default OFF); procedural disks/glow then disappear. The custom sun has a soft angular glow. Clouds are removed; the old saved cloud slot remains for config compatibility. Sky controls share a group without intervening text.
-  Sky always uses a 256×256 RGBA16F GPU atmosphere lookup, half-resolution
-  atmosphere, and 6×3 integration samples (formerly 8×4). There are no quality
-  toggles; legacy saved flags are ignored by the renderer. Detailed celestial
+  toggle is ON (default OFF); procedural disks/glow then disappear. The custom sun has
+  a soft angular glow. Saved default-OFF Clouds adds separate lower volumetric
+  cumulus and higher thin cirrus. Photon-inspired styling uses rounded tower tops,
+  fixed cellular density erosion, soft interior scattering and sun-facing highlights.
+  Sunrise/sunset are warm, twilight dims and night lighting is subdued blue-grey.
+  GPU density atlases smooth-blend two seeds over forty seconds; one refreshes per
+  boundary, without CPU noise generation or GPU readback. Two distance detail
+  levels blend to cheaper density and fewer samples; distant clouds fade.
+  Low/Medium/High uses 64/128/256-pixel atlas tiles (two atlases total 1/4/16 MiB).
+  Samples range 8–64; resolution offers Quarter/Half/Full (defaults Medium/24/Half).
+  Quarter/Half reconstruct into two full-resolution RGBA16F history buffers using
+  subpixel sampling, camera reprojection and neighborhood clamping. Time/weather,
+  FOV or quality cuts and long frame gaps reset history. Full renders directly.
+  Cloud shading follows the current camera using the existing offscreen state
+  scope and composites over celestial details. Layers remain direction anchored,
+  without world-position parallax, terrain shadows or wind translation. Older
+  ignored cloud flags migrate OFF. Sky controls share a group without text.
+  Weather changer blends the custom sky toward overcast, attenuates procedural
+  celestial details and darkens thunderstorms in the final pass without
+  invalidating the clear-atmosphere cache.
+  Clear night atmosphere is near black, with 30% fewer procedural stars.
+  Stars fade in as the twilight atmosphere fades out, reversing at dawn,
+  and rotate about the sun/moon axis at half their celestial-angle speed.
+  Their daily angle wrap occurs while hidden in daylight; saved fixed time freezes them.
+  Stars disappear at weather 20; nights fade to pitch black by 30 and remain
+  black at higher weather values.
+  Sky always uses a 256×256 RGBA16F GPU atmosphere lookup, a saved Quarter resolution toggle (OFF: Half, ON: Quarter; default OFF), and 6×3 integration samples (formerly 8×4). Atmosphere resolution is independent of clouds; its legacy saved flags are ignored by the renderer. Cloud quality controls are independent. Detailed celestial
   effects stay full resolution. Lookup refreshes after angle changes over
   1/4096 of a day or sample changes; unsupported texture paths retain direct
   rendering with reduced samples. Resources are bounded to four contexts per
   thread and remain owned by those GL contexts. The shader skips invisible
-  star work and stops sunlight integration for shadowed samples; no cloud
-  noise or clock reads remain.
+  star work and stops sunlight integration for shadowed samples. Cloud animation reuses the frame limiter timestamp; no additional clock reads are made.
   Disabling the sky
   restores the original shader path. Both standard and instanced layouts are
   supported. Environment distinguishes matched source, compilation, linked
@@ -151,6 +198,9 @@ instructions. Keep this map current when architecture, files, or commands change
   `.groupWithPrevious()` can also join other related controls. Toggle and slider
   rows share compact 9% heights and 11% spacing. Child toggle labels and switch
   right edges align with child sliders; each Render toggle/slider pair is grouped.
+  Dropdowns use compact buttons, text-field corners and one continuous surface
+  around open options. Gapless animated row fills meet the inner button-style
+  outline; geometry and highlight opacities are configured in `menu_style.h`.
 - **Zoom** defaults OFF; hold C when enabled, scroll to adjust 1.5x–30x (initial 3x).
   Its menu key-binding control captures a new key; L/Escape are reserved. Enabled
   state, binding, default magnification, and scroll sensitivity persist. Default zoom slider uses
@@ -173,7 +223,8 @@ instructions. Keep this map current when architecture, files, or commands change
 - **FPS Display** defaults OFF and displays average FPS during focused rendering,
   including menus. Optional 1% low appears alongside FPS and uses the reciprocal
   of the mean slowest ceil(1%) frame times in the same window. Average/update is
-  250–2000 ms in 250 ms steps (default 1000 ms). Font scale uses the shared
+  250–2000 ms in 250 ms steps (default 1000 ms). Its saved Inter/Mojangles font
+  dropdown is independent of Tablist and defaults to Inter. Font scale uses the shared
   0.5x–6x tiers (default 1x). The shared `MenuPage::anchor()` control draws a 16:9
   rectangle with four selectable/hoverable corner dots (default top-left).
   The shared `display_layout.h` API stacks visible displays at each corner in
@@ -185,8 +236,21 @@ instructions. Keep this map current when architecture, files, or commands change
   shared font renderer, without native hooks. At most 32768 frame times are stored
   per window; exceeding that keeps average FPS exact and shows `--` for the low.
 - **FPS Limit** optionally paces Minecraft frames from 30–480 FPS, including
-  inventory screens and the custom menu. Minecraft's own
-  FPS setting and VSync can still impose a lower limit.
+  inventory screens and the custom menu. The saved **Reduce input delay** child
+  toggle defaults OFF and uses Minecraft's wait before frame update instead of
+  holding the finished frame in the overlay callback. Exact-build candidate and
+  interval-store relays override only the local cap/interval, including vanilla
+  unlimited; saved Minecraft options and native wait exemptions remain.
+  It uses the same FPS slider and skips the overlay wait whenever its native
+  hook is installed, including callbacks without a new interval observation.
+  Unsupported builds fall back to standard pacing and show a settings notice.
+  Hooks install only if FPS Limit and Reduce input delay are enabled in saved
+  settings at startup. Enabling later requires restarting Minecraft; disabling
+  takes effect during play. Native yield/sleep policy remains unchanged and may
+  cost more CPU. Minecraft's FPS setting can limit standard pacing; VSync can
+  limit both modes. Adaptive pacing, workload sampling and the input-poll hook
+  are removed. Retired adaptive/GPU config slots remain disabled for compatibility.
+  Input latency and routing need in-game verification.
 - **Analog WASD** optionally uses NuPhy Air60 HE key travel through a separate
   Python helper and virtual Xbox 360 controller. No third-party Python packages.
   This feature is low priority and the owner is considering removing it; do not
@@ -255,6 +319,7 @@ Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
 
 | Files | Purpose / when to read |
 | --- | --- |
+| `projection_jitter.cpp`, `projection_jitter.h`, `tests/test_projection_jitter.cpp`, `docs/research/jitter_research.md` | Experimental 2/4/8-sample projection jitter without software accumulation; exact-build GL import gate, live pass exclusions, and GLES raster checks. |
 | `client.cpp`, `client_modules.h` | Mod entry points, launcher callbacks, atomic module state and typed module controls, cursor and gameplay coordination. Start here for module lifecycle wiring. |
 | `client_settings.h` | Shared saved-setting API for zoom, sprint, blur, FPS limit, Lobby Scanner, and related modules; implemented by the existing persistence backend in `auto_gg.cpp`. |
 | `runtime.cpp` | Hidden freestanding `memset` and `memcpy` primitives for the Android mod; no linked libc. |
@@ -280,7 +345,7 @@ Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
 | `fps_display.cpp`, `fps_display.h`, `tests/test_fps_display.cpp` | Bounded frame-time averaging, optional 1% low, and passive anchored text overlay. |
 | `display_layout.cpp`, `display_layout.h` | Frame-thread EGL dimensions and per-corner vertical stacking for HUD displays; reset once before rendering displays. |
 | `ui_scale.h` | Shared scale tiers used by menu fitting and display fonts. |
-| `fps_limiter.cpp`, `fps_limiter.h` | Host monotonic timer loading and software frame pacing. |
+| `fps_limiter.cpp`, `fps_limiter.h`, `tests/test_fps_limiter.cpp`, `docs/research/fps_limiter_research.md` | Host monotonic timer and software frame pacing, opt-in fixed native interval/cap relays for Reduce input delay, executable ABI/gate and fallback checks, and native pacing evidence. |
 | `skin_image.cpp`, `skin_image.h`, `tests/test_skin_image.cpp` | Host skin allocation independent of export setup, mapped-ELF path lookup (not host dladdr), and asynchronous lossless PNG export to the mod root `skins/` folder; dynamic libc/zlib loading and export checks. |
 | `tablist.cpp`, `tablist.h`, `tests/test_tablist.cpp` | Native roster/skin/world lifecycle observers, copied player cache, Lobby Scanner join notifications, Tab/scroll/right-click input, selected-skin preview, animated dimensions and overlay, saved master toggle, and native/layout checks. |
 | `flarial_presence.cpp`, `flarial_presence.h`, `tests/test_flarial_presence.cpp` | Optional host curl/json-c background presence lookup for Tablist badges; no linked runtime dependency. |
@@ -289,8 +354,8 @@ Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
 | `docs/research/rea_mod_candidates.md` | REA smoke-test outcome and bounded static leads for camera controls, brightness, latency, coordinate copying, and durability. |
 | `popup.cpp`, `popup.h`, `tests/test_popup_render.cpp` | Shared thread-safe yes/no popup API, copied text, callbacks, passive input, drawing above GUIs, and headless pixel checks. |
 | `particles.cpp`, `particles.h`, `tests/test_particles.cpp`, `docs/research/particles_research.md` | Player attack effects, native critical emitter, behavior/ABI gates, and investigation evidence. |
-| `environment.cpp`, `environment.h`, `tests/test_environment.cpp` | Local celestial-angle and HSV fog overrides, exact-build Dimension hooks and behavior checks. |
-| `sky_renderer.cpp`, `sky_renderer.h`, `tests/test_sky_renderer.cpp` | Full-screen camera-directed sky with procedural atmosphere, sun, moon and stars; one-degree horizon blend, GPU atmosphere reuse across tiny time changes; linked-program/draw gates, per-thread/context metadata, same-frame native celestial suppression and real GLES pixel checks. |
+| `environment.cpp`, `environment.h`, `tests/test_environment.cpp`, `docs/research/weather_research.md` | Local weather, celestial-angle and HSV fog overrides, exact-build Weather/Dimension hooks and behavior checks. |
+| `sky_renderer.cpp`, `sky_renderer.h`, `tests/test_sky_renderer.cpp` | Full-screen camera-directed sky with procedural atmosphere, sun, moon, stars and optional cached cumulus/cirrus layers; cloud detail/samples/resolution controls, one-degree horizon blend, GPU atmosphere reuse across tiny time changes; linked-program/draw gates, per-thread/context metadata, same-frame native celestial suppression and real GLES pixel checks. |
 | `render.cpp`, `render.h`, `tests/test_render.cpp`, `docs/research/render_research.md` | Experimental vertical/horizontal terrain-list filtering, opt-in v8 terrain/preparation CSV timing, executable hook/ABI checks, and native investigation evidence. |
 | `gpu_shader_services.cpp`, `gpu_shader_services.h`, `tests/test_gpu_shader_services.cpp` | Exact-build shader-source/compile and link/delete/use-program observer service for Environment; always forwards native calls, with no uniform-reuse trial. |
 | `render_frame_trace.cpp`, `render_frame_trace.h`, `tests/test_render_frame_trace.cpp` | Opt-in v8 wall/calling-thread CPU stages: callback gaps, client, limiter, overlays, exact native GL submit vtable and game EGL swap import. Nested stages overlap; no work is skipped. |
@@ -308,7 +373,7 @@ Tests are in `tests/`. Maintainer API notes and native research are in `docs/`.
 | `tests/test_analog.py`, `tests/test_analog_input.cpp` | Helper mapping/protocol checks and native IPC integration checks. |
 | `tests/test_custom_menu.cpp` | Real headless EGL/GLES checks for antialiasing, animation/input timing, key/mouse releases, tile/settings scrolling, callback reentry, conditional group layout/hit areas, hidden focus/drag cleanup, slider extremes, registration limits, and layout bounds. Includes the menu source. |
 | `tests/test_custom_font.cpp` | Real headless EGL/GLES checks for custom-menu text/icon pixels, inherited clipping and color masks, texture uploads, and GL state restoration. Includes the renderer source to inspect atlas pixels. |
-| `tests/test_motion_blur.cpp` | Real headless EGL/GLES checks for pixels, state, and history lifecycle. |
+| `tests/test_motion_blur.cpp` | Real headless EGL/GLES checks for pixels, state, history lifecycle. |
 | `tests/test_auto_gg.cpp` | AutoGG checks, including native sender bridge, local/remote chat echo, packet layouts, cooldown/cancellation, saved settings, and build-ID/vtable gate. Includes the module source to exercise its private bridge. |
 | `skins/` | Local timestamped skin exports; do not ship personal exports in distribution archives. |
 | `build/`, `__pycache__/` | Generated files, not source. |
@@ -468,8 +533,12 @@ Run the checks relevant to the changed module (create `build/` first if absent):
 
 ```sh
 mkdir -p build
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_projection_jitter.cpp hook_manager.cpp -ldl -lEGL -lGLESv2 -o build/test-projection-jitter
+LIBGL_ALWAYS_SOFTWARE=1 MESA_SHADER_CACHE_DIR=/tmp/mcpelauncher-mesa-cache ./build/test-projection-jitter
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_fps_display.cpp display_layout.cpp -o build/test-fps-display
 ./build/test-fps-display
+g++ -std=c++17 -Wall -Wextra -Werror tests/test_fps_limiter.cpp hook_manager.cpp -ldl -o build/test-fps-limiter
+./build/test-fps-limiter
 g++ -std=c++17 -Wall -Wextra -Werror tests/test_ui_animation.cpp -o build/test-ui-animation
 ./build/test-ui-animation
 clang++ -std=c++17 -Wall -Wextra -Werror -I/usr/include/freetype2 \
@@ -543,7 +612,7 @@ Follow the existing `.cpp`/`.h` pattern when a feature needs separate logic. Wir
 its lifecycle into `client.cpp` and declare its typed controls in
 `client_modules.h`. Add its tile and settings page in `declare_menu_pages()` in
 `menu_pages.cpp`, using `newTile()`/`newPage()` and the existing control builders.
-The menu supports 36 tiles, 36 pages, and 16 controls per page, displayed as up to
+The menu supports 36 tiles, 36 pages, and 17 controls per page, displayed as up to
 nine visible tiles and five settings rows, both with mouse-wheel scrolling. Registration
 happens once when the menu first opens, not while rendering; labels and asset
 paths must remain valid for the lifetime of the menu. Builder overflow or invalid

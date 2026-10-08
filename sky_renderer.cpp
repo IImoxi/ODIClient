@@ -12,8 +12,10 @@
 namespace {
 #ifdef ODI_SKY_TEST_OPTIONS
 bool skyLookupEnabled = true, skyHalfResolutionEnabled = true, skyReducedSamplesEnabled = true;
+bool skyCloudTemporalEnabled = true;
 #else
 constexpr bool skyLookupEnabled = true, skyHalfResolutionEnabled = true, skyReducedSamplesEnabled = true;
+constexpr bool skyCloudTemporalEnabled = true;
 #endif
 // The replacement keeps the native interface when disabled. Its custom draw
 // uses gl_VertexID and the live camera matrix, never the native dome's colors.
@@ -34,9 +36,10 @@ void main() {
     if (ODISkyVertex.x > 0.5) {
         vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0,
                       (gl_VertexID == 2) ? 3.0 : -1.0);
+        vec2 direction = p+ODISkyVertex.yz;
         mat4 invViewProj = inverse(u_viewProj);
-        vec4 nearPoint = invViewProj * vec4(p, -1.0, 1.0);
-        vec4 farPoint = invViewProj * vec4(p, 1.0, 1.0);
+        vec4 nearPoint = invViewProj * vec4(direction, -1.0, 1.0);
+        vec4 farPoint = invViewProj * vec4(direction, 1.0, 1.0);
         // Homogeneous difference also handles an infinite far projection (w=0).
         v_color0 = vec4(farPoint.xyz * nearPoint.w - nearPoint.xyz * farPoint.w, 2.0);
         v_worldPos = vec3(0.0);
@@ -93,16 +96,219 @@ constexpr char skyFragmentShader[] = R"GLSL(#version 310 es
 precision highp float;
 precision highp int;
 in highp vec4 v_color0;
-uniform vec4 ODISkyFragment; // enabled, native celestial angle, unused, vanilla celestials
+uniform vec4 ODISkyFragment; // enabled, native celestial angle, weather amount, vanilla celestials
 uniform vec4 ODISkyQuality; // reduced samples, source: direct/LUT/screen
 uniform vec4 ODISkyViewport; // viewport origin and dimensions
 uniform highp sampler2D ODISkyAtmosphere;
+uniform vec4 ODISkyClouds; // enabled/seed, blend/detail, view samples/tile size, atlas tile size
+uniform highp sampler2D ODISkyCloudA;
+uniform highp sampler2D ODISkyCloudB;
+uniform highp sampler2D ODISkyCloudLayer;
+uniform vec4 ODISkyCloudResolve; // subpixel offset UV, history weight, sampling phase
+uniform mat4 ODISkyCloudPrevious;
 layout(location = 0) out highp vec4 bgfx_FragData0;
 const float PI = 3.14159265359;
+const float cloudBase = 1.2, cloudTop = 4.0;
 float hash(vec3 p) {
     p = fract(p * 0.1031);
     p += dot(p, p.yzx + 33.33);
     return fract((p.x + p.y) * p.z);
+}
+float cloudNoise(vec3 p, vec2 period, float seed) {
+    vec3 cell = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    float values[8];
+    for (int i = 0; i < 8; ++i) {
+        vec3 q = cell + vec3(float(i & 1), float((i >> 1) & 1), float((i >> 2) & 1));
+        q = mod(q, vec3(period.x, period.x, period.y));
+        values[i] = hash(q + seed * vec3(17.0, 31.0, 43.0));
+    }
+    return mix(mix(mix(values[0], values[1], f.x), mix(values[2], values[3], f.x), f.y),
+               mix(mix(values[4], values[5], f.x), mix(values[6], values[7], f.x), f.y), f.z);
+}
+float cloudBillows(vec3 p, float seed) {
+    vec3 cell = floor(p), f = fract(p);
+    float nearest = 3.0;
+    for (int z = -1; z <= 1; ++z) for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+        vec3 offset = vec3(float(x), float(y), float(z)), q = cell + offset;
+        q = mod(q, 16.0);
+        q += seed * vec3(17.0, 31.0, 43.0);
+        vec3 center = vec3(hash(q), hash(q+7.0), hash(q+13.0));
+        vec3 delta = offset + center - f;
+        nearest = min(nearest, dot(delta, delta));
+    }
+    return 1.0-smoothstep(0.20, 0.85, sqrt(nearest));
+}
+vec4 cloudField() {
+    float size = ODISkyClouds.z;
+    vec2 tile = floor(gl_FragCoord.xy / size);
+    vec2 uv = (mod(gl_FragCoord.xy, size) - 0.5) / (size - 1.0);
+    float height = (tile.x + tile.y * 4.0) / 15.0;
+    vec3 p = vec3(uv.x * 8.0, height * 2.0, uv.y * 8.0);
+    float seed = ODISkyClouds.x, fine = 0.0, weight = 0.0, coarse = 0.0;
+    int octaves = int(ODISkyClouds.y) + 3;
+    for (int i = 0; i < 6; ++i) {
+        if (i >= octaves) break;
+        float scale = exp2(float(i)), amplitude = 1.0 / scale;
+        fine += cloudNoise(p * scale, vec2(8.0 * scale), seed) * amplitude;
+        weight += amplitude;
+        if (i == 1) coarse = fine / weight;
+    }
+    fine /= weight;
+    float coverage = cloudNoise(vec3(uv.x*4.0, 0.7, uv.y*4.0), vec2(4.0), seed+47.0);
+    // Broad coverage grows coherent cloud masses; 3D erosion rounds their edges.
+    coarse = coverage;
+    fine = coverage + (fine-0.5)*0.22 - (1.0-cloudBillows(p*2.0, seed))*0.055;
+    // The upper layer has long fibres, separate from the rounded lower field.
+    vec3 wisps = vec3(uv.x * 8.0, 0.7, uv.y * 64.0);
+    wisps.x += cloudNoise(vec3(uv.x*4.0, 0.3, uv.y*4.0), vec2(4.0), seed+71.0)*1.2;
+    wisps.z += cloudNoise(vec3(uv.x*8.0, 0.4, uv.y*8.0), vec2(8.0), seed+83.0)*8.0;
+    float cirrusCoarse = cloudNoise(wisps, vec2(8.0, 64.0), seed + 97.0);
+    float cirrus = cirrusCoarse * 0.65
+                 + cloudNoise(wisps * 2.0, vec2(16.0, 128.0), seed + 97.0) * 0.25
+                 + cloudNoise(wisps * 4.0, vec2(32.0, 256.0), seed + 97.0) * 0.10;
+    float cirrusCoverage = cloudNoise(vec3(uv.x*4.0,1.4,uv.y*4.0),vec2(4.0),seed+97.0);
+    cirrus = mix(cirrusCoverage,cirrus,0.55);
+    // A fixed, periodic fine volume shares the atlas but never follows the animated seed.
+    vec3 detailPoint = vec3(uv.x*8.0, height*8.0, uv.y*8.0);
+    float micro = cloudBillows(detailPoint*2.0, 193.0) * 0.75
+                + cloudNoise(detailPoint*2.0, vec2(16.0), 211.0) * 0.25;
+    return vec4(coarse, fine, cirrus, micro);
+}
+vec4 cloudSlice(sampler2D field, vec2 uv, float slice) {
+    float size = ODISkyClouds.w;
+    vec2 tile = vec2(mod(slice, 4.0), floor(slice / 4.0));
+    return texture(field, (tile * size + fract(uv) * (size - 1.0) + 0.5) / (size * 4.0));
+}
+vec4 cloudMap(vec3 p) {
+    float slice = clamp((p.y - cloudBase) / (cloudTop-cloudBase), 0.0, 1.0) * 15.0;
+    float low = floor(slice), high = min(low + 1.0, 15.0);
+    vec2 uv = p.xz / 16.0;
+    vec4 a = mix(cloudSlice(ODISkyCloudA, uv, low), cloudSlice(ODISkyCloudA, uv, high), fract(slice));
+    vec4 b = mix(cloudSlice(ODISkyCloudB, uv, low), cloudSlice(ODISkyCloudB, uv, high), fract(slice));
+    return mix(a, b, ODISkyClouds.y);
+}
+float cloudMicro(vec3 p) {
+    // Tile the small fixed volume independently in all axes. Its pattern stays
+    // still while the broad coverage evolves, including across seed boundaries.
+    float slice = fract(p.y*1.3) * 15.0;
+    return mix(cloudSlice(ODISkyCloudA, p.xz*0.6, floor(slice)).a,
+               cloudSlice(ODISkyCloudA, p.xz*0.6, min(floor(slice)+1.0, 15.0)).a, fract(slice));
+}
+vec2 cloudSample(vec3 p, float distant, bool fineDetail) {
+    if (p.y <= cloudBase || p.y >= cloudTop) return vec2(0.0, 0.5);
+    vec4 field = cloudMap(p);
+    float n = mix(field.g, field.r, distant);
+    float height = (p.y-cloudBase) / (cloudTop-cloudBase);
+    // Denser banks grow taller towers instead of sharing one flat upper cap.
+    float cap = mix(0.35, 1.0, smoothstep(0.46, 0.70, field.r));
+    float shape = smoothstep(0.0, 0.08, height) * (1.0-smoothstep(cap*0.65, cap, height));
+    float threshold = mix(0.49, 0.38, min(ODISkyFragment.z * 2.0, 1.0));
+    float density = max(n-threshold-(1.0-shape)*0.18, 0.0);
+    float micro = 0.5;
+    if (fineDetail && density > 0.0 && distant < 1.0) {
+        micro = cloudMicro(p);
+        float strength = mix(0.025, 0.065, clamp((ODISkyClouds.w-64.0)/192.0, 0.0, 1.0));
+        density = max(density-(1.0-micro)*strength*(1.0-distant), 0.0);
+    }
+    return vec2(density*8.0*shape, micro);
+}
+float cloudDensity(vec3 p, float distant) {
+    return cloudSample(p, distant, false).x;
+}
+vec3 cloudAmbient(vec3 sun) {
+    float daylight = smoothstep(-0.10, 0.25, sun.y);
+    float twilight = smoothstep(-0.28, -0.06, sun.y) * (1.0-daylight);
+    return mix(vec3(0.00018, 0.00028, 0.00048), vec3(0.19, 0.23, 0.29), daylight)
+         + vec3(0.012, 0.009, 0.017) * twilight;
+}
+vec3 cloudSunlight(vec3 sun) {
+    return mix(vec3(1.0, 0.27, 0.09), vec3(1.0, 0.94, 0.84), smoothstep(0.0, 0.45, sun.y))
+         * smoothstep(-0.08, 0.06, sun.y);
+}
+vec4 clouds(vec3 ray, vec3 sun) {
+    if (ray.y <= 0.035) return vec4(0.0);
+    float distant = smoothstep(5.0, 13.0, 1.2 / ray.y);
+    vec3 ambient = cloudAmbient(sun), sunlight = cloudSunlight(sun);
+    vec3 moon = -sun;
+    float moonlight = smoothstep(0.0, 0.3, moon.y) * (1.0-smoothstep(-0.12, 0.08, sun.y));
+    // Thin cirrus at a higher altitude, with a softly filtered distant field.
+    vec3 highPoint = ray * (6.2 / ray.y);
+    vec4 wisps = cloudMap(vec3(highPoint.x * 0.35, cloudTop, highPoint.z * 1.6));
+    float thin = pow(smoothstep(0.43, 0.76, wisps.b),1.6) * 0.35;
+    thin *= 1.0-smoothstep(18.0, 32.0, length(highPoint.xz));
+    vec3 thinColor = ambient + sunlight * 0.48 + vec3(0.00045, 0.00065, 0.001) * moonlight;
+    vec4 upper = vec4(thinColor * thin, thin);
+    float start = cloudBase / ray.y, end = min(cloudTop / ray.y, 24.0);
+    if (start >= end) return upper;
+    int count = max(8, int(mix(ODISkyClouds.z, ODISkyClouds.z * 0.5, distant)));
+    float stepSize = (end-start) / float(count);
+    // Fixed per-pixel offsets break up horizontal march bands without animating noise.
+    float jitter = (hash(vec3(floor(gl_FragCoord.xy), 53.0+ODISkyCloudResolve.w*7.0))-0.5)*0.9;
+    vec4 accumulated = vec4(0.0);
+    float mu = dot(ray, sun);
+    // Forward/backward scattering lobes brighten the edges looking toward the sun.
+    float phase = 0.35 + 0.22 * 0.6156 / pow(max(1.3844-1.24*mu, 0.02), 1.5)
+                       + 0.10 * 0.96 / pow(max(1.04+0.4*mu, 0.02), 1.5);
+    for (int i = 0; i < 64; ++i) {
+        if (i >= count || accumulated.a > 0.985) break;
+        vec3 p = ray * (start + (float(i)+0.5+jitter)*stepSize);
+        vec2 cloud = cloudSample(p, distant, true);
+        float density = cloud.x;
+        if (density <= 0.001) continue;
+        float optical = 0.0;
+        if (sun.y > -0.08) {
+            // Three bounded sunlight samples shade the side facing away from the sun.
+            for (int j = 0; j < 3; ++j)
+                optical += cloudDensity(p + sun * (0.18 + float(j)*0.50), distant) * 0.50;
+        }
+        // Lower-extinction terms approximate light scattered back into shadowed interiors.
+        float scattered = exp(-optical*2.5) + 0.30*exp(-optical*0.8) + 0.08*exp(-optical*0.25);
+        float powder = mix(0.75, 1.15, 1.0-exp(-density*3.0));
+        vec3 illumination = ambient * mix(0.48, 1.0, smoothstep(cloudBase, cloudTop, p.y))
+                          + sunlight * scattered * phase * powder
+                          + vec3(0.00045, 0.00065, 0.001) * moonlight;
+        float opacity = (1.0-exp(-density*stepSize*2.0)) * (1.0-smoothstep(16.0, 24.0, length(p.xz)));
+        accumulated.rgb += (1.0-accumulated.a) * opacity * illumination;
+        accumulated.a += (1.0-accumulated.a) * opacity;
+    }
+    vec4 result = accumulated + upper * (1.0-accumulated.a);
+    float thunder = max(ODISkyFragment.z*2.0-1.0, 0.0);
+    float day = smoothstep(-0.12, 0.08, sun.y);
+    result.rgb *= (1.0-thunder*0.65) * (1.0-smoothstep(0.20, 0.30, ODISkyFragment.z)*(1.0-day));
+    result *= smoothstep(0.035, 0.09, ray.y);
+    return result;
+}
+vec4 resolveClouds(vec3 ray) {
+    vec2 uv = gl_FragCoord.xy / ODISkyViewport.zw;
+    vec2 currentUV = uv-ODISkyCloudResolve.xy;
+    ivec2 size = textureSize(ODISkyCloudA, 0);
+    vec2 pixel = currentUV*vec2(size)-0.5;
+    ivec2 cell = ivec2(floor(pixel));
+    vec2 fraction = fract(pixel);
+    // A compact reconstruction kernel preserves edge contrast on the first frame.
+    fraction = fraction*fraction*(3.0-2.0*fraction);
+    vec4 a = texelFetch(ODISkyCloudA, clamp(cell, ivec2(0), size-1), 0);
+    vec4 b = texelFetch(ODISkyCloudA, clamp(cell+ivec2(1,0), ivec2(0), size-1), 0);
+    vec4 c = texelFetch(ODISkyCloudA, clamp(cell+ivec2(0,1), ivec2(0), size-1), 0);
+    vec4 d = texelFetch(ODISkyCloudA, clamp(cell+ivec2(1,1), ivec2(0), size-1), 0);
+    vec4 current = mix(mix(a,b,fraction.x), mix(c,d,fraction.x), fraction.y);
+    if (ODISkyCloudResolve.z <= 0.0) return current;
+    vec4 previous = ODISkyCloudPrevious * vec4(ray, 0.0);
+    if (previous.w <= 0.00001) return current;
+    vec2 previousUV = previous.xy/previous.w*0.5+0.5;
+    if (any(lessThan(previousUV, vec2(0.0))) || any(greaterThan(previousUV, vec2(1.0)))) return current;
+    vec4 history = texture(ODISkyCloudB, previousUV);
+    vec4 low = min(min(a,b),min(c,d)), high = max(max(a,b),max(c,d));
+    history = clamp(history, low, high);
+    float rejection = 1.0-smoothstep(0.08,0.35,abs(history.a-current.a));
+    int divisor = int(ODISkyClouds.x), phase = int(ODISkyCloudResolve.w);
+    ivec2 offset = ivec2(phase%divisor, (phase/divisor)%divisor);
+    bool fresh = all(equal(ivec2(gl_FragCoord.xy)%divisor, offset));
+    bool exactGrid = all(equal(ivec2(ODISkyViewport.zw), size*divisor));
+    // Keep the reprojected high-resolution samples between checkerboard updates.
+    if (exactGrid && !fresh && rejection > 0.95) return history;
+    return mix(current, history, min(ODISkyCloudResolve.z,0.65)*rejection);
 }
 vec3 atmosphere(vec3 ray, vec3 sun) {
     // Distances in km. Fixed single-scattering integration needs no textures.
@@ -187,7 +393,9 @@ vec3 sky(vec3 ray) {
     vec3 moon = -sun;
     float day = smoothstep(-0.12, 0.08, sun.y);
     vec3 color = skyAtmosphere(ray, sun);
-    float nightBrightness = mix(0.55, 1.0, smoothstep(-0.35, -0.08, sun.y));
+    // Keep clear night atmosphere near black without dimming celestial details.
+    float twilightBrightness = smoothstep(-0.35, -0.08, sun.y);
+    float nightBrightness = mix(0.002, 1.0, twilightBrightness);
     color *= nightBrightness;
     float sunDot = dot(ray, sun), moonDot = dot(ray, moon);
     if (ODISkyFragment.w < 0.5) {
@@ -203,20 +411,47 @@ vec3 sky(vec3 ray) {
     float moonDisk = smoothstep(cos(0.017), cos(0.014), moonDot);
     color += vec3(0.50, 0.60, 0.80) * moonDisk * (1.0 - day);
     }
-    // These regions have exactly zero star visibility in the original formula.
-    if (day < 1.0 && ray.y > 0.0) {
-        vec3 cell = floor(ray * 450.0);
+    // Stars brighten as the twilight atmosphere fades, and reverse at dawn.
+    float starVisibility = 1.0 - twilightBrightness;
+    if (starVisibility > 0.0 && ray.y > 0.0 && ODISkyFragment.z < 0.20) {
+        // Sample the rotating field about the same Z axis as the sun/moon.
+        // The angle wraps during daylight, when the stars are invisible.
+        float starAngle = rotation * 0.5;
+        float c = cos(starAngle), s = sin(starAngle);
+        vec3 starRay = vec3(c * ray.x - s * ray.y, s * ray.x + c * ray.y, ray.z);
+        vec3 cell = floor(starRay * 450.0);
         float star = hash(cell);
-        if (star >= 0.992) {
-            float starShape = pow(max(1.0 - length(fract(ray * 450.0) - 0.5) * 2.0, 0.0), 5.0);
+        // Keep 70% of the original 0.8% star-cell density.
+        if (star >= 0.9944) {
+            float starShape = pow(max(1.0 - length(fract(starRay * 450.0) - 0.5) * 2.0, 0.0), 5.0);
             color += mix(vec3(0.65, 0.78, 1.0), vec3(1.0, 0.82, 0.62), hash(cell + 7.0))
-                     * starShape * 2.5 * (1.0-day) * smoothstep(0.0, 0.18, ray.y);
+                     * starShape * 2.5 * starVisibility * smoothstep(0.0, 0.18, ray.y);
         }
+    }
+    // Apply overcast after the cached clear atmosphere and celestial details.
+    // Weather changes need no lookup refresh and affect every rendering path.
+    float rain = min(ODISkyFragment.z * 2.0, 1.0);
+    float thunder = max(ODISkyFragment.z * 2.0 - 1.0, 0.0);
+    vec3 overcast = mix(vec3(0.003, 0.004, 0.007), vec3(0.20, 0.22, 0.25), day);
+    overcast *= mix(0.65, 1.0, 1.0 - max(ray.y, 0.0));
+    color = mix(color, overcast, rain * 0.95) * (1.0 - thunder * 0.65);
+    // Fade nights to black between weather 20 and 30; storms stay black.
+    color *= 1.0 - smoothstep(0.20, 0.30, ODISkyFragment.z) * (1.0 - day);
+    if (ODISkyClouds.x > 0.5) {
+        vec4 layer = texture(ODISkyCloudLayer, (gl_FragCoord.xy - ODISkyViewport.xy) / ODISkyViewport.zw);
+        color = layer.rgb + color * (1.0-layer.a);
     }
     return pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
 }
 void main() {
-#if defined(ODI_LUT_PASS)
+#if defined(ODI_CLOUD_RESOLVE_PASS)
+    bgfx_FragData0 = resolveClouds(normalize(v_color0.xyz));
+#elif defined(ODI_CLOUD_FIELD_PASS)
+    bgfx_FragData0 = cloudField();
+#elif defined(ODI_CLOUD_PASS)
+    float rotation = ODISkyFragment.y * 2.0 * PI;
+    bgfx_FragData0 = clouds(normalize(v_color0.xyz), vec3(-sin(rotation), cos(rotation), 0.0));
+#elif defined(ODI_LUT_PASS)
     vec2 uv = (gl_FragCoord.xy - 0.5) / 255.0;
     float elevation = uv.y * 2.0 - 1.0;
     float y = sign(elevation) * elevation * elevation;
@@ -299,8 +534,24 @@ struct ShaderRecord { unsigned int id, stage; } shaderRecords[64]{};
 unsigned int failureClaimed;
 char driverFailure[256]{};
 enum class Kind { Other, Sky, NativeCelestial, NativeSunMoon };
-struct ProgramUniforms { GLuint program; Kind kind; GLint vertex, fragment, matrix, quality, viewport, atmosphere; };
+struct ProgramUniforms {
+    GLuint program; Kind kind; GLint vertex, fragment, matrix, quality, viewport, atmosphere;
+    GLint clouds = -1, cloudA = -1, cloudB = -1, cloudLayer = -1;
+    GLint cloudResolve = -1, cloudPrevious = -1;
+};
 struct AtmosphereTarget { GLuint texture, framebuffer; int width, height; };
+struct CloudTargets {
+    ProgramUniforms fieldProgram, layerProgram, resolveProgram;
+    AtmosphereTarget fields[2], layer, history[2];
+    GLfloat previousMatrix[16]{}, angle = 0, weather = 0;
+    long long lastFrame = 0;
+    unsigned int phase = 0, age = 0, historyIndex = 0;
+    int samples = 0, resolution = -1;
+    bool historyValid = false, resolveFailed = false;
+    long long epoch = 0, period = -1;
+    int detail = 0, tileSize = 0;
+    bool failed = false;
+};
 struct ContextTargets {
     EGLContext context;
     ProgramUniforms lookupProgram, halfProgram;
@@ -309,6 +560,7 @@ struct ContextTargets {
     float angle;
     bool reduced, lookupValid, failed;
     GLint textureUnit;
+    CloudTargets clouds;
 };
 struct ThreadState {
     EGLContext context;
@@ -398,12 +650,16 @@ void parameters(const ProgramUniforms& program, bool enabled) {
     GLfloat vertex[] = {enabled ? 1.0f : 0.0f, 0, 0, 0};
     float angle = environment_sky_angle();
     if (!(angle >= 0.0f && angle <= 1.0f)) angle = 0.0f;
-    GLfloat fragment[] = {enabled ? 1.0f : 0.0f, angle, 0,
+    auto weather = environment_weather();
+    GLfloat fragment[] = {enabled ? 1.0f : 0.0f, angle,
+                          weather.enabled ? (weather.rain + weather.thunder) * 0.5f : 0.0f,
                           client_environment_vanilla_celestials() ? 1.0f : 0.0f};
     uniform4(program.vertex, 1, vertex);
     uniform4(program.fragment, 1, fragment);
     const GLfloat quality[] = {skyReducedSamplesEnabled ? 1.0f : 0.0f, 0, 0, 0};
     uniform4(program.quality, 1, quality);
+    const GLfloat noClouds[] = {0, 0, 0, 0};
+    uniform4(program.clouds, 1, noClouds);
 }
 void invalidated(unsigned int) { __atomic_fetch_add(&revision, 1, __ATOMIC_RELEASE); }
 void rememberFailure(GLuint object, bool shader) {
@@ -449,6 +705,10 @@ void programBound(unsigned int program) {
                   getUniformLocation(program, "ODISkyFragment"), getUniformLocation(program, "u_viewProj"),
                   getUniformLocation(program, "ODISkyQuality"), getUniformLocation(program, "ODISkyViewport"),
                   getUniformLocation(program, "ODISkyAtmosphere")};
+        cached.clouds = getUniformLocation(program, "ODISkyClouds");
+        cached.cloudA = getUniformLocation(program, "ODISkyCloudA");
+        cached.cloudB = getUniformLocation(program, "ODISkyCloudB");
+        cached.cloudLayer = getUniformLocation(program, "ODISkyCloudLayer");
         if (cached.vertex >= 0 && cached.fragment >= 0 && cached.matrix >= 0) cached.kind = Kind::Sky;
         else if (getUniformLocation(program, "SunMoonColor") >= 0) cached.kind = Kind::NativeSunMoon;
         else if (getUniformLocation(program, "CloudColor") >= 0
@@ -486,11 +746,15 @@ void main() {
     gl_Position = vec4(p, 0.0, 1.0);
 }
 )GLSL";
-ProgramUniforms atmosphereProgram(bool lookup) {
+ProgramUniforms atmosphereProgram(bool lookup, int cloudPass = 0) {
     GLuint vertex = apiCreateShader(GL_VERTEX_SHADER), fragment = apiCreateShader(GL_FRAGMENT_SHADER);
-    const char* vertexSource = lookup ? lookupVertexShader : skyVertexShader;
+    const char* vertexSource = lookup || cloudPass == 1 ? lookupVertexShader : skyVertexShader;
     // Compile the same atmosphere implementation for both offscreen passes.
-    const char* sources[] = {"#version 310 es\n", lookup ? "#define ODI_LUT_PASS\n" : "#define ODI_ATMOSPHERE_PASS\n",
+    const char* define = cloudPass == 1 ? "#define ODI_CLOUD_FIELD_PASS\n"
+                      : cloudPass == 2 ? "#define ODI_CLOUD_PASS\n"
+                      : cloudPass == 3 ? "#define ODI_CLOUD_RESOLVE_PASS\n"
+                      : lookup ? "#define ODI_LUT_PASS\n" : "#define ODI_ATMOSPHERE_PASS\n";
+    const char* sources[] = {"#version 310 es\n", define,
                             skyFragmentShader + sizeof("#version 310 es\n") - 1};
     apiShaderSource(vertex, 1, &vertexSource, nullptr); apiCompileShader(vertex);
     apiShaderSource(fragment, 3, sources, nullptr); apiCompileShader(fragment);
@@ -507,7 +771,10 @@ ProgramUniforms atmosphereProgram(bool lookup) {
     return {program, Kind::Sky, getUniformLocation(program, "ODISkyVertex"),
             getUniformLocation(program, "ODISkyFragment"), getUniformLocation(program, "u_viewProj"),
             getUniformLocation(program, "ODISkyQuality"), getUniformLocation(program, "ODISkyViewport"),
-            getUniformLocation(program, "ODISkyAtmosphere")};
+            getUniformLocation(program, "ODISkyAtmosphere"),
+            getUniformLocation(program, "ODISkyClouds"), getUniformLocation(program, "ODISkyCloudA"),
+            getUniformLocation(program, "ODISkyCloudB"), getUniformLocation(program, "ODISkyCloudLayer"),
+            getUniformLocation(program, "ODISkyCloudResolve"), getUniformLocation(program, "ODISkyCloudPrevious")};
 }
 bool resizeTarget(AtmosphereTarget& target, int width, int height) {
     if (target.width == width && target.height == height) return true;
@@ -573,10 +840,123 @@ struct PassState {
         capability(GL_SAMPLE_MASK, sampleMask);
     }
 };
-bool optimizationFallback;
-void prepareAtmosphere(ThreadState& s, const GLfloat* matrix, TextureBinding& binding) {
+bool optimizationFallback, cloudFallback;
+bool prepareClouds(ContextTargets& t, const GLfloat* matrix, const GLint* viewport,
+                   TextureBinding& fieldA, TextureBinding& fieldB, TextureBinding& layerBinding) {
+    auto& c = t.clouds;
+    if (c.failed || t.textureUnit < 3) return false;
+    fieldA.save(t.textureUnit - 2); fieldB.save(t.textureUnit - 3); layerBinding.save(t.textureUnit - 1);
+    if (!c.fieldProgram.program) c.fieldProgram = atmosphereProgram(false, 1);
+    if (!c.layerProgram.program) c.layerProgram = atmosphereProgram(false, 2);
+    if (!c.fieldProgram.program || !c.layerProgram.program) { c.failed = true; return false; }
+    const auto frame = fps_limiter_frame_timestamp_ns(); // Reuse the frame clock, no extra clock syscall.
+    if (c.period < 0 || (frame > 0 && (!c.epoch || frame < c.epoch))) {
+        c.epoch = frame > 0 ? frame : 0; c.period = -1;
+    }
+    const auto elapsed = frame > c.epoch ? frame - c.epoch : 0;
+    const auto period = elapsed / 40000000000ll;
+    int detail = client_environment_cloud_detail();
+    bool rebuild = c.detail != detail || c.period < 0 || period < c.period || period > c.period + 1;
+    int first = 2;
+    if (rebuild) { first = 0; c.detail = detail; c.tileSize = 32 << detail; }
+    else if (period != c.period) {
+        // The old target becomes the next seed; the fully blended target stays current.
+        auto old = c.fields[0]; c.fields[0] = c.fields[1]; c.fields[1] = old;
+        first = 1;
+    }
+    // Generate at most one GPU atlas every forty seconds after initial allocation.
+    for (int i = first; i < 2; ++i) {
+        apiActiveTexture(GL_TEXTURE0 + fieldA.unit);
+        if (!resizeTarget(c.fields[i], c.tileSize * 4, c.tileSize * 4)) { c.failed = true; return false; }
+        apiBindFramebuffer(GL_DRAW_FRAMEBUFFER, c.fields[i].framebuffer);
+        apiViewport(0, 0, c.fields[i].width, c.fields[i].height);
+        apiUseProgram(c.fieldProgram.program);
+        const GLfloat generation[] = {static_cast<float>((period + i) % 4096), static_cast<float>(detail),
+                                      static_cast<float>(c.tileSize), 0};
+        uniform4(c.fieldProgram.clouds, 1, generation);
+        drawArrays(GL_TRIANGLES, 0, 3);
+    }
+    c.period = period;
+    apiActiveTexture(GL_TEXTURE0 + layerBinding.unit);
+    int resolution = client_environment_cloud_resolution(), samples = client_environment_cloud_samples();
+    int divisor = 1 << (2-resolution);
+    if (!resizeTarget(c.layer, (viewport[2]+divisor-1)/divisor, (viewport[3]+divisor-1)/divisor)) {
+        c.failed = true; return false;
+    }
+    bool temporal = skyCloudTemporalEnabled && divisor > 1 && !c.resolveFailed;
+    if (temporal && !c.resolveProgram.program) {
+        c.resolveProgram = atmosphereProgram(false, 3);
+        if (!c.resolveProgram.program) { c.resolveFailed = true; temporal = false; }
+    }
+    auto weatherState = environment_weather();
+    float weather = weatherState.enabled ? (weatherState.rain+weatherState.thunder)*0.5f : 0.0f;
+    float angle = environment_sky_angle();
+    float angleDelta = angle > c.angle ? angle-c.angle : c.angle-angle;
+    if (angleDelta > 0.5f) angleDelta = 1.0f-angleDelta;
+    bool history = temporal && c.historyValid && !rebuild && c.samples == samples && c.resolution == resolution
+        && c.history[c.historyIndex].width == viewport[2] && c.history[c.historyIndex].height == viewport[3]
+        && frame >= c.lastFrame && frame-c.lastFrame < 250000000ll && angleDelta < 1.0f/1024.0f
+        && weather-c.weather < 0.02f && c.weather-weather < 0.02f;
+    // Row lengths isolate projection scale from camera rotation; FOV jumps reset history.
+    if (history) for (int row = 0; row < 2; ++row) {
+        float oldScale = 0, newScale = 0;
+        for (int col = 0; col < 3; ++col) {
+            oldScale += c.previousMatrix[col*4+row]*c.previousMatrix[col*4+row];
+            newScale += matrix[col*4+row]*matrix[col*4+row];
+        }
+        if (newScale < oldScale*0.96f || newScale > oldScale*1.04f) history = false;
+    }
+    if (!history) { c.age = 0; c.phase = 0; }
+    unsigned int phase = c.phase % static_cast<unsigned int>(divisor*divisor);
+    float offsetX = temporal ? ((float(phase%divisor)+0.5f)/divisor-0.5f)/c.layer.width : 0.0f;
+    float offsetY = temporal ? ((float(phase/divisor)+0.5f)/divisor-0.5f)/c.layer.height : 0.0f;
+    apiActiveTexture(GL_TEXTURE0 + fieldA.unit); apiBindTexture(GL_TEXTURE_2D, c.fields[0].texture);
+    apiActiveTexture(GL_TEXTURE0 + fieldB.unit); apiBindTexture(GL_TEXTURE_2D, c.fields[1].texture);
+    apiBindFramebuffer(GL_DRAW_FRAMEBUFFER, c.layer.framebuffer);
+    apiViewport(0, 0, c.layer.width, c.layer.height);
+    apiUseProgram(c.layerProgram.program); parameters(c.layerProgram, true);
+    const GLfloat vertex[] = {1, offsetX*2.0f, offsetY*2.0f, 0}; uniform4(c.layerProgram.vertex, 1, vertex);
+    const GLfloat sampling[] = {0, 0, 0, temporal ? float(phase) : 0}; uniform4(c.layerProgram.cloudResolve,1,sampling);
+    apiUniformMatrix4fv(c.layerProgram.matrix, 1, GL_FALSE, matrix);
+    float blend = static_cast<float>(elapsed % 40000000000ll) / 40000000000.0f;
+    blend = blend*blend*(3.0f-2.0f*blend);
+    const GLfloat cloud[] = {1, blend, static_cast<float>(samples), static_cast<float>(c.tileSize)};
+    uniform4(c.layerProgram.clouds, 1, cloud);
+    apiUniform1i(c.layerProgram.cloudA, fieldA.unit); apiUniform1i(c.layerProgram.cloudB, fieldB.unit);
+    drawArrays(GL_TRIANGLES, 0, 3);
+    c.historyValid = false;
+    if (temporal) {
+        auto next = 1-c.historyIndex;
+        apiActiveTexture(GL_TEXTURE0+layerBinding.unit);
+        if (!resizeTarget(c.history[next],viewport[2],viewport[3])) { c.resolveFailed = true; return true; }
+        apiActiveTexture(GL_TEXTURE0+fieldA.unit); apiBindTexture(GL_TEXTURE_2D,c.layer.texture);
+        apiActiveTexture(GL_TEXTURE0+fieldB.unit);
+        apiBindTexture(GL_TEXTURE_2D,history ? c.history[c.historyIndex].texture : c.layer.texture);
+        apiBindFramebuffer(GL_DRAW_FRAMEBUFFER,c.history[next].framebuffer); apiViewport(0,0,viewport[2],viewport[3]);
+        apiUseProgram(c.resolveProgram.program); parameters(c.resolveProgram,true);
+        apiUniformMatrix4fv(c.resolveProgram.matrix,1,GL_FALSE,matrix);
+        apiUniformMatrix4fv(c.resolveProgram.cloudPrevious,1,GL_FALSE,history ? c.previousMatrix : matrix);
+        const GLfloat bounds[] = {0,0,float(viewport[2]),float(viewport[3])};
+        uniform4(c.resolveProgram.viewport,1,bounds);
+        const GLfloat resolve[] = {offsetX,offsetY,history ? float(c.age)/float(c.age+1) : 0,float(phase)};
+        uniform4(c.resolveProgram.cloudResolve,1,resolve);
+        const GLfloat grid[] = {float(divisor),0,0,0}; uniform4(c.resolveProgram.clouds,1,grid);
+        apiUniform1i(c.resolveProgram.cloudA,fieldA.unit); apiUniform1i(c.resolveProgram.cloudB,fieldB.unit);
+        drawArrays(GL_TRIANGLES,0,3);
+        c.historyIndex = next; c.historyValid = true;
+        if (c.age < 16) ++c.age;
+        ++c.phase;
+    }
+    for (int i = 0; i < 16; ++i) c.previousMatrix[i] = matrix[i];
+    c.lastFrame = frame; c.angle = angle; c.weather = weather; c.samples = samples; c.resolution = resolution;
+    return true;
+}
+void prepareAtmosphere(ThreadState& s, const GLfloat* matrix, TextureBinding& binding,
+                       TextureBinding& fieldA, TextureBinding& fieldB, TextureBinding& layerBinding) {
     bool lookup = skyLookupEnabled, half = skyHalfResolutionEnabled;
-    if (!lookup && !half) {
+    bool cloudEnabled = client_environment_clouds();
+    __atomic_store_n(&cloudFallback, false, __ATOMIC_RELEASE);
+    if (!lookup && !half && !cloudEnabled) {
         __atomic_store_n(&optimizationFallback, false, __ATOMIC_RELEASE); return;
     }
     ContextTargets* targets = nullptr;
@@ -587,9 +967,11 @@ void prepareAtmosphere(ThreadState& s, const GLfloat* matrix, TextureBinding& bi
         cached.textureUnit = units - 1; targets = &cached; break;
     }
     if (!targets || targets->failed || targets->textureUnit < 0) {
+        __atomic_store_n(&cloudFallback, cloudEnabled, __ATOMIC_RELEASE);
         __atomic_store_n(&optimizationFallback, true, __ATOMIC_RELEASE); return;
     }
     auto& t = *targets;
+    if (!cloudEnabled) { t.clouds.historyValid = false; t.clouds.age = 0; }
     binding.save(t.textureUnit);
     GLfloat angle = environment_sky_angle();
     if (!(angle >= 0.0f && angle <= 1.0f)) angle = 0;
@@ -602,8 +984,9 @@ void prepareAtmosphere(ThreadState& s, const GLfloat* matrix, TextureBinding& bi
     float angleDelta = angle > t.angle ? angle - t.angle : t.angle - angle;
     if (angleDelta > 0.5f) angleDelta = 1.0f - angleDelta;
     bool refresh = !t.lookupValid || angleDelta > 1.0f / 4096.0f || reduced != t.reduced;
+    bool cloudReady = false;
     // An unchanged lookup needs no offscreen draw or framebuffer/state switches.
-    if (half || refresh) {
+    if (half || refresh || cloudEnabled) {
         PassState saved;
         if (!t.vao) apiGenVertexArrays(1, &t.vao);
         apiBindVertexArray(t.vao);
@@ -622,7 +1005,9 @@ void prepareAtmosphere(ThreadState& s, const GLfloat* matrix, TextureBinding& bi
         }
         if (half && !t.failed) {
             if (!t.halfProgram.program) t.halfProgram = atmosphereProgram(false);
-            if (!t.halfProgram.program || !resizeTarget(t.half, (viewport[2] + 1) / 2, (viewport[3] + 1) / 2)) t.failed = true;
+            int divisor = client_environment_sky_quarter_resolution() ? 4 : 2;
+            if (!t.halfProgram.program || !resizeTarget(t.half, (viewport[2] + divisor - 1) / divisor,
+                                                       (viewport[3] + divisor - 1) / divisor)) t.failed = true;
             else {
                 apiBindFramebuffer(GL_DRAW_FRAMEBUFFER, t.half.framebuffer);
                 apiViewport(0, 0, t.half.width, t.half.height);
@@ -636,15 +1021,25 @@ void prepareAtmosphere(ThreadState& s, const GLfloat* matrix, TextureBinding& bi
                 texture = t.half.texture; source = 2;
             }
         }
+        if (cloudEnabled && !t.failed) cloudReady = prepareClouds(t, matrix, viewport, fieldA, fieldB, layerBinding);
     }
+    __atomic_store_n(&cloudFallback, cloudEnabled && !cloudReady, __ATOMIC_RELEASE);
     __atomic_store_n(&optimizationFallback, t.failed, __ATOMIC_RELEASE);
     if (t.failed) return;
+    apiActiveTexture(GL_TEXTURE0 + binding.unit);
     apiBindTexture(GL_TEXTURE_2D, texture);
     const GLfloat quality[] = {reduced ? 1.0f : 0.0f, static_cast<float>(source), 0, 0};
     const GLfloat bounds[] = {static_cast<float>(viewport[0]), static_cast<float>(viewport[1]),
                               static_cast<float>(viewport[2]), static_cast<float>(viewport[3])};
     uniform4(s.current.quality, 1, quality); uniform4(s.current.viewport, 1, bounds);
     apiUniform1i(s.current.atmosphere, t.textureUnit);
+    if (cloudReady) {
+        apiActiveTexture(GL_TEXTURE0 + layerBinding.unit);
+        apiBindTexture(GL_TEXTURE_2D, t.clouds.historyValid
+            ? t.clouds.history[t.clouds.historyIndex].texture : t.clouds.layer.texture);
+        apiUniform1i(s.current.cloudLayer, layerBinding.unit);
+        const GLfloat cloud[] = {1, 0, 0, 0}; uniform4(s.current.clouds, 1, cloud);
+    }
     apiActiveTexture(binding.active);
 }
 bool replaceDraw() {
@@ -661,7 +1056,11 @@ bool replaceDraw() {
     if (current != static_cast<GLint>(s->current.program)) return false;
     if (s->current.kind == Kind::NativeCelestial) return true;
     if (s->current.kind == Kind::NativeSunMoon) return !client_environment_vanilla_celestials();
-    if (!enabled) { parameters(s->current, false); s->replacedFrame = 0; return false; }
+    if (!enabled) {
+        parameters(s->current, false); s->replacedFrame = 0;
+        for (auto& target : s->targets) { target.clouds.historyValid = false; target.clouds.age = 0; }
+        return false;
+    }
     GLfloat matrix[16];
     getUniform(s->current.program, s->current.matrix, matrix);
     if (!validMatrix(matrix)) {
@@ -679,8 +1078,8 @@ bool replaceDraw() {
     getInteger(GL_DEPTH_FUNC, &function); getBoolean(GL_DEPTH_WRITEMASK, &write);
     disable(GL_CULL_FACE); disable(GL_BLEND); enable(GL_DEPTH_TEST);
     depthFunc(GL_LEQUAL); depthMask(GL_FALSE);
-    TextureBinding textureBinding;
-    prepareAtmosphere(*s, matrix, textureBinding);
+    TextureBinding textureBinding, cloudA, cloudB, cloudLayer;
+    prepareAtmosphere(*s, matrix, textureBinding, cloudA, cloudB, cloudLayer);
     drawArrays(GL_TRIANGLES, 0, 3);
     depthFunc(static_cast<GLenum>(function)); depthMask(write);
     capability(GL_CULL_FACE, cull); capability(GL_DEPTH_TEST, depth); capability(GL_BLEND, blend);
@@ -768,6 +1167,7 @@ const char* sky_renderer_status() {
     if (error) return error;
     if (__atomic_load_n(&matrixMissing, __ATOMIC_ACQUIRE)) return "Custom sky: native camera matrix unavailable";
     if (__atomic_load_n(&optimizationFallback, __ATOMIC_ACQUIRE)) return "Sky texture optimization unavailable; using direct atmosphere";
+    if (__atomic_load_n(&cloudFallback, __ATOMIC_ACQUIRE)) return "Cloud textures unavailable; rendering sky without clouds";
     if (__atomic_load_n(&drawObserved, __ATOMIC_ACQUIRE)) return "Full-screen custom sky draw observed";
     if (__atomic_load_n(&linkedObserved, __ATOMIC_ACQUIRE)) return "Custom sky linked; waiting for sky draw";
     if (__atomic_load_n(&linkFailed, __ATOMIC_ACQUIRE))

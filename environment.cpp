@@ -15,13 +15,15 @@ Angle originalAngle;
 bool ready;
 float lastSkyAngle;
 const char* error = "Environment: initializing";
-unsigned long long options = (6000ull << 3) | (100ull << 34) | (1ull << 42);
+unsigned long long options = (6000ull << 3) | (100ull << 34) | (2ull << 55) | (2ull << 57) | (1ull << 60);
 unsigned long long snapshot() { return __atomic_load_n(&options, __ATOMIC_ACQUIRE); }
 EnvironmentSettings settings(unsigned long long v) {
     return {bool(v & 1), bool(v & 2), bool(v & 4), int((v >> 3) & 32767),
             int((v >> 18) & 511), int((v >> 27) & 127), int((v >> 34) & 127),
             bool(v & (1ull << 41)), bool(v & (1ull << 42)), bool(v & (1ull << 43)), bool(v & (1ull << 44)),
-            bool(v & (1ull << 45)), bool(v & (1ull << 46))};
+            bool(v & (1ull << 45)), bool(v & (1ull << 46)),
+            bool(v & (1ull << 47)), int((v >> 48) & 127),
+            int((v >> 55) & 3), (int((v >> 57) & 7) + 1) * 8, int((v >> 60) & 3), bool(v & (1ull << 62))};
 }
 unsigned long long pack(EnvironmentSettings s) {
     return static_cast<unsigned long long>(s.enabled) | (static_cast<unsigned long long>(s.time) << 1)
@@ -33,7 +35,13 @@ unsigned long long pack(EnvironmentSettings s) {
         | (static_cast<unsigned long long>(s.vanillaCelestials) << 43)
         | (static_cast<unsigned long long>(s.skyLookup) << 44)
         | (static_cast<unsigned long long>(s.skyHalfResolution) << 45)
-        | (static_cast<unsigned long long>(s.skyReducedSamples) << 46);
+        | (static_cast<unsigned long long>(s.skyReducedSamples) << 46)
+        | (static_cast<unsigned long long>(s.weather) << 47)
+        | (static_cast<unsigned long long>(s.weatherAmount) << 48)
+        | (static_cast<unsigned long long>(s.cloudDetail) << 55)
+        | (static_cast<unsigned long long>(s.cloudSamples / 8 - 1) << 57)
+        | (static_cast<unsigned long long>(s.cloudResolution) << 60)
+        | (static_cast<unsigned long long>(s.skyQuarterResolution) << 62);
 }
 int clamp(int v, int max) { return v < 0 ? 0 : v > max ? max : v; }
 void change(unsigned long long mask, unsigned long long bits) {
@@ -69,6 +77,59 @@ float angle(void* dimension, int ticks, float partialTick) {
     __atomic_store(&lastSkyAngle, &result, __ATOMIC_RELAXED);
     return result;
 }
+using WeatherTick = void (*)(void*);
+WeatherTick originalWeatherTick;
+unsigned long weatherBase;
+// Numeric identities and copied scalars only; dereference exclusively inside
+// the live Weather callback. The launcher has one live client Overworld.
+struct WeatherHistory {
+    unsigned long identity, dimension;
+    int tick;
+    float native[4], applied[4];
+};
+WeatherHistory weatherHistory{};
+int weatherLock;
+struct WeatherLock {
+    WeatherLock() { while (__atomic_exchange_n(&weatherLock, 1, __ATOMIC_ACQUIRE)) {} }
+    ~WeatherLock() { __atomic_store_n(&weatherLock, 0, __ATOMIC_RELEASE); }
+};
+template<class T> T& weatherField(void* object, unsigned long offset) {
+    return *reinterpret_cast<T*>(static_cast<unsigned char*>(object) + offset);
+}
+void weatherTick(void* weather) {
+    auto dimension = weatherField<void*>(weather, profile::weatherDimension);
+    auto level = dimension ? weatherField<void*>(dimension, profile::weatherLevel) : nullptr;
+    bool client = level && weatherField<unsigned long>(level, 0) == weatherBase + profile::weatherClientLevelTable
+        && weatherField<unsigned long>(dimension, 0) == weatherBase + profile::fogTables[0];
+    if (!client) { originalWeatherTick(weather); return; }
+    const auto identity = reinterpret_cast<unsigned long>(weather);
+    const auto dimensionId = reinterpret_cast<unsigned long>(dimension);
+    {
+        WeatherLock lock;
+        auto& h = weatherHistory;
+        if (h.identity == identity && h.dimension == dimensionId) {
+            if (h.tick == weatherField<int>(weather, profile::weatherTickCounter))
+                for (int i = 0; i < 4; ++i)
+                    if (weatherField<float>(weather, profile::weatherFields[i]) == h.applied[i])
+                        weatherField<float>(weather, profile::weatherFields[i]) = h.native[i];
+            h.identity = 0;
+        }
+    }
+    // Native simulation always sees its own interpolation values, including
+    // newly received packet changes; never override targets or LevelData.
+    originalWeatherTick(weather);
+    auto override = environment_weather();
+    if (!override.enabled) return;
+    WeatherLock lock;
+    auto& h = weatherHistory;
+    h.identity = identity; h.dimension = dimensionId;
+    h.tick = weatherField<int>(weather, profile::weatherTickCounter);
+    for (int i = 0; i < 4; ++i) {
+        h.native[i] = weatherField<float>(weather, profile::weatherFields[i]);
+        h.applied[i] = i < 2 ? override.rain : override.thunder;
+        weatherField<float>(weather, profile::weatherFields[i]) = h.applied[i];
+    }
+}
 bool install(unsigned long base) {
     if (!hooks::supported(base)) return false;
     const unsigned long sites[] = {profile::fogOverworldSite, profile::fogPassthroughSite,
@@ -81,7 +142,7 @@ bool install(unsigned long base) {
         if (!hooks::readable(base, sites[i], sizes[i], true) || !hooks::matches(base, sites[i], signatures[i], sizes[i])) return false;
     if (!hooks::matches_pointer(base, profile::fogTables[0] + profile::angleSlot, profile::angleFunction)) return false;
     Fog replacements[] = {fog<0>, fog<1>, fog<2>};
-    hooks::Patch patches[4];
+    hooks::Patch patches[5];
     for (unsigned int i = 0; i < 3; ++i) {
         if (!hooks::matches_pointer(base, profile::fogTables[i] + profile::fogSlot, profile::fogFunctions[i])) return false;
         originals[i] = reinterpret_cast<Fog>(base + profile::fogFunctions[i]);
@@ -91,7 +152,40 @@ bool install(unsigned long base) {
     originalAngle = reinterpret_cast<Angle>(base + profile::angleFunction);
     patches[3] = {profile::fogTables[0] + profile::angleSlot, base + profile::angleFunction,
                   reinterpret_cast<unsigned long>(&angle)};
-    return hooks::install("Environment", base, patches, 4) == hooks::InstallResult::Installed;
+    if (!hooks::matches(base, profile::weatherTickFunction, profile::weatherTickSignature,
+                        sizeof(profile::weatherTickSignature))
+        || !hooks::matches(base, profile::weatherClientCheck, profile::weatherClientSignature,
+                           sizeof(profile::weatherClientSignature))
+        || !hooks::matches(base, profile::weatherInterpolation, profile::weatherInterpolationSignature,
+                           sizeof(profile::weatherInterpolationSignature))) return false;
+    auto relay = hooks::allocate_near(base + profile::weatherTickFunction, 1);
+    if (!relay) return false;
+    auto jump = [](unsigned char* out, unsigned long target) {
+        out[0] = 0xff; out[1] = 0x25;
+        for (int i = 2; i < 6; ++i) out[i] = 0;
+        __builtin_memcpy(out + 6, &target, 8);
+    };
+    jump(relay, reinterpret_cast<unsigned long>(&weatherTick));
+    __builtin_memcpy(relay + 32, profile::weatherTickSignature, 10);
+    jump(relay + 42, base + profile::weatherTickFunction + 10);
+    long delta = reinterpret_cast<unsigned long>(relay) - (base + profile::weatherTickFunction + 5);
+    if (delta < -2147483648L || delta > 2147483647L
+        || !hooks::make_executable(relay, hooks::page_size())) {
+        hooks::release(relay, hooks::page_size()); return false;
+    }
+    unsigned char branch[8] = {0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90};
+    int displacement = static_cast<int>(delta);
+    __builtin_memcpy(branch + 1, &displacement, 4);
+    unsigned long expected, replacement;
+    __builtin_memcpy(&expected, profile::weatherTickSignature, 8);
+    __builtin_memcpy(&replacement, branch, 8);
+    patches[4] = {profile::weatherTickFunction, expected, replacement};
+    weatherBase = base;
+    originalWeatherTick = reinterpret_cast<WeatherTick>(relay + 32);
+    auto result = hooks::install("Environment", base, patches, 5);
+    if (result == hooks::InstallResult::Installed) return true;
+    if (result != hooks::InstallResult::Retained) hooks::release(relay, hooks::page_size());
+    return false;
 }
 }
 void environment_init() {
@@ -129,5 +223,29 @@ void client_set_environment_sky(bool v) {
     change(1ull << 41, static_cast<unsigned long long>(v) << 41);
 }
 bool client_environment_sky() { return snapshot() & (1ull << 41); }
+void client_set_environment_clouds(bool v) { change(1ull << 42, static_cast<unsigned long long>(v) << 42); }
+bool client_environment_clouds() { return snapshot() & (1ull << 42); }
+void client_set_environment_cloud_detail(int v) { change(3ull << 55, static_cast<unsigned long long>(v < 1 ? 1 : clamp(v, 3)) << 55); }
+int client_environment_cloud_detail() { return settings(snapshot()).cloudDetail; }
+void client_set_environment_cloud_samples(int v) {
+    int samples = v < 8 ? 8 : clamp(v, 64);
+    change(7ull << 57, static_cast<unsigned long long>((samples + 4) / 8 - 1) << 57);
+}
+int client_environment_cloud_samples() { return settings(snapshot()).cloudSamples; }
+void client_set_environment_sky_quarter_resolution(bool v) { change(1ull << 62, static_cast<unsigned long long>(v) << 62); }
+bool client_environment_sky_quarter_resolution() { return snapshot() & (1ull << 62); }
+void client_set_environment_cloud_resolution(int v) { change(3ull << 60, static_cast<unsigned long long>(clamp(v, 2)) << 60); }
+int client_environment_cloud_resolution() { return settings(snapshot()).cloudResolution; }
 void client_set_environment_vanilla_celestials(bool v) { change(1ull << 43, static_cast<unsigned long long>(v) << 43); }
 bool client_environment_vanilla_celestials() { return snapshot() & (1ull << 43); }
+
+void client_set_environment_weather(bool v) { change(1ull << 47, static_cast<unsigned long long>(v) << 47); }
+bool client_environment_weather() { return snapshot() & (1ull << 47); }
+void client_set_environment_weather_amount(int v) { change(127ull << 48, static_cast<unsigned long long>(clamp(v, 100)) << 48); }
+int client_environment_weather_amount() { return settings(snapshot()).weatherAmount; }
+EnvironmentWeather environment_weather() {
+    auto s = settings(snapshot());
+    return {__atomic_load_n(&ready, __ATOMIC_ACQUIRE) && s.enabled && s.weather,
+            (s.weatherAmount < 50 ? s.weatherAmount * 2 : 100) / 100.0f,
+            (s.weatherAmount > 50 ? (s.weatherAmount - 50) * 2 : 0) / 100.0f};
+}

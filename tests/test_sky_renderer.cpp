@@ -10,8 +10,23 @@
 #include "../sky_renderer.cpp"
 
 static bool enabledValue = true;
+static bool cloudsValue = false;
+static bool skyQuarterValue = false;
+static int cloudDetailValue = 2, cloudSamplesValue = 24, cloudResolutionValue = 1;
 static float angleValue;
+static EnvironmentWeather weatherValue{};
 static long long frameValue = 100;
+static GLuint countedFieldProgram;
+static int fieldDraws;
+static GLuint countedLayerProgram, countedResolveProgram;
+static int layerDraws, resolveDraws;
+static void countedDraw(GLenum mode, GLint first, GLsizei count) {
+    GLint current; glGetIntegerv(GL_CURRENT_PROGRAM, &current);
+    if (current == GLint(countedFieldProgram)) ++fieldDraws;
+    if (current == GLint(countedLayerProgram)) ++layerDraws;
+    if (current == GLint(countedResolveProgram)) ++resolveDraws;
+    glDrawArrays(mode, first, count);
+}
 static GpuShaderSourceTransform sourceCallback;
 static GpuShaderSourceMatched matchedCallback;
 static GpuShaderCompileObserver compileCallback;
@@ -21,9 +36,15 @@ extern "C" void* mcpelauncher_host_dlopen(const char* name, int flags) { return 
 extern "C" void* mcpelauncher_host_dlsym(void* library, const char* name) { return dlsym(library, name); }
 bool client_environment_enabled() { return enabledValue; }
 bool client_environment_sky() { return enabledValue; }
+bool client_environment_sky_quarter_resolution() { return skyQuarterValue; }
+bool client_environment_clouds() { return cloudsValue; }
+int client_environment_cloud_detail() { return cloudDetailValue; }
+int client_environment_cloud_samples() { return cloudSamplesValue; }
+int client_environment_cloud_resolution() { return cloudResolutionValue; }
 bool client_environment_vanilla_celestials() { return false; }
 const char* environment_error() { return nullptr; }
 float environment_sky_angle() { return angleValue; }
+EnvironmentWeather environment_weather() { return weatherValue; }
 long long fps_limiter_frame_timestamp_ns() { return frameValue; }
 bool chat_print_local(const char*) { return true; }
 bool gpu_shader_services_set_shader_source_transform(GpuShaderSourceTransform callback) { sourceCallback = callback; return true; }
@@ -121,6 +142,7 @@ static void ppm(const char* path, const std::vector<unsigned char>& a) {
 int main(int argc, char** argv) {
     assert(skyLookupEnabled && skyHalfResolutionEnabled && skyReducedSamplesEnabled);
     skyLookupEnabled = skyHalfResolutionEnabled = skyReducedSamplesEnabled = false;
+    skyCloudTemporalEnabled = false; // Isolate single-frame lighting/layout checks before history checks below.
     if (argc > 1 && std::strcmp(argv[1], "--preview") == 0) { width = 768; height = 512; }
     auto platform = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplayEXT"));
     assert(platform); EGLDisplay display=platform(0x31dd,EGL_DEFAULT_DISPLAY,nullptr);
@@ -145,6 +167,7 @@ int main(int argc, char** argv) {
     float camera[16]; matrix(camera);
     auto day=render(standardProgram,camera,0), instancedDay=render(instancedProgram,camera,0);
     auto night=render(standardProgram,camera,0.5f);
+    assert(average(night) < 3.0); // Clear midnight atmosphere stays near black.
     int minValue=255,maxValue=0,uncovered=0;
     for (int i=0;i<width*height;++i) { for(int c=0;c<3;++c) { int v=day[i*4+c]; if(v<minValue) minValue=v; if(v>maxValue) maxValue=v; }
         if(day[i*4]==255 && day[i*4+1]==0 && day[i*4+2]==255) ++uncovered; }
@@ -168,7 +191,7 @@ int main(int argc, char** argv) {
     glActiveTexture(GL_TEXTURE0 + units - 1); glBindTexture(GL_TEXTURE_2D, borrowedTexture);
     glSamplerParameteri(borrowedSampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     glBindSampler(units - 1, borrowedSampler); glActiveTexture(GL_TEXTURE0);
-    for (float angle : {0.0f, 0.20f, 0.25f, 0.30f, 0.5f, 0.75f}) {
+    for (float angle : {0.0f, 0.20f, 0.25f, 0.26f, 0.30f, 0.45f, 0.5f, 0.55f, 0.75f}) {
         matrix(camera, 0.8f);
         auto reference = render(standardProgram, camera, angle);
         for (int mask = 1; mask < 8; ++mask) {
@@ -223,11 +246,23 @@ int main(int argc, char** argv) {
     skyLookupEnabled = false;
     assert(difference(fallback, render(standardProgram, camera, 0.2f)) == 0);
     targets->failed = false;
-    // Offset/odd viewport, clipping and channel masks survive the half pass.
+    skyHalfResolutionEnabled = true;
+    for (bool quarter : {false, true}) {
+        skyQuarterValue = quarter;
+        auto pixels = render(standardProgram, camera, 0.2f);
+        int divisor = quarter ? 4 : 2;
+        assert(targets->half.width == (width + divisor - 1) / divisor);
+        assert(targets->half.height == (height + divisor - 1) / divisor);
+        assert(!optimizationFallback && !pixels.empty());
+    }
+    skyQuarterValue = true;
+    // Offset/odd viewport, clipping and channel masks survive the quarter pass.
     skyHalfResolutionEnabled = true; bind(standardProgram, camera);
     glViewport(3, 5, width-7, height-11); glEnable(GL_SCISSOR_TEST); glScissor(4, 6, width-9, height-13);
     glColorMask(GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE); assert(drawCallback());
     GLint offset[4]; GLboolean channels[4]; glGetIntegerv(GL_VIEWPORT, offset); glGetBooleanv(GL_COLOR_WRITEMASK, channels);
+    assert(targets->half.width == (width-7+3)/4 && targets->half.height == (height-11+3)/4);
+    skyQuarterValue = false;
     assert(offset[0] == 3 && offset[1] == 5 && offset[2] == width-7 && offset[3] == height-11);
     assert(!channels[0] && channels[1] && !channels[2] && channels[3] && glIsEnabled(GL_SCISSOR_TEST));
     glViewport(0, 0, width, height); glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -242,8 +277,186 @@ int main(int argc, char** argv) {
     skyLookupEnabled = false;
     assert(difference(unmasked, render(standardProgram, camera, 0.21f)) < 0.2);
     skyLookupEnabled = skyHalfResolutionEnabled = skyReducedSamplesEnabled = false;
+    // Rain overcast and thunder darkening use the same final pass for direct,
+    // lookup and half-resolution rendering, and disabling restores clear pixels.
+    for (int mask = 0; mask < 8; ++mask) {
+        skyLookupEnabled = mask & 1; skyHalfResolutionEnabled = mask & 2; skyReducedSamplesEnabled = mask & 4;
+        matrix(camera);
+        for (float angle : {0.0f, 0.5f}) {
+            weatherValue = {};
+            auto clear = render(standardProgram, camera, angle);
+            weatherValue = {true, 1.0f, 0.0f};
+            auto rain = render(standardProgram, camera, angle);
+            weatherValue.thunder = 1.0f;
+            auto thunder = render(standardProgram, camera, angle);
+            if (angle == 0.0f) assert(difference(clear, rain) > 1.0);
+            else assert(average(clear) < 3.0);
+            if (angle == 0.0f) assert(average(thunder) < average(rain) * 0.8);
+            else assert(average(rain) == 0 && average(thunder) == 0);
+            assert(difference(thunder, render(instancedProgram, camera, angle)) < 2.0);
+            weatherValue.enabled = false;
+            assert(difference(clear, render(standardProgram, camera, angle)) == 0);
+        }
+    }
+    // Midnight is completely black from weather 30 onward, including 30–50.
+    for (int amount : {30, 40, 50}) {
+        weatherValue = {true, amount / 50.0f, 0.0f};
+        assert(average(render(standardProgram, camera, 0.5f)) == 0);
+    }
+    weatherValue = {};
+    // Cached cloud density is view independent; the shaded layer follows each camera.
+    skyLookupEnabled = skyHalfResolutionEnabled = skyReducedSamplesEnabled = true;
+    matrix(camera);
+    auto clearCloudReference = render(standardProgram, camera, 0.0f);
+    cloudsValue = true;
+    auto cloudDay = render(standardProgram, camera, 0.0f);
+    assert(!cloudFallback && difference(clearCloudReference, cloudDay) > 1.0);
+    assert(targets->clouds.layer.width == (width+1)/2 && targets->clouds.layer.height == (height+1)/2);
+    assert(difference(cloudDay, render(instancedProgram, camera, 0.0f)) < 0.1);
+    auto cloudNight = render(standardProgram, camera, 0.5f);
+    assert(average(cloudNight) < 12.0 && average(cloudDay) > average(cloudNight)*8.0);
+    auto cloudSunset = render(standardProgram, camera, 0.25f);
+    auto cloudTwilight = render(standardProgram, camera, 0.28f);
+    auto cloudSunrise = render(standardProgram, camera, 0.75f);
+    assert(average(cloudTwilight) < average(cloudSunset));
+    assert(difference(cloudSunset, cloudDay) > 10.0 && difference(cloudSunrise, cloudNight) > 1.0);
+    assert(difference(cloudDay, render(standardProgram, infiniteCamera, 0.0f)) < 0.1);
+    matrix(camera, 0, 20);
+    assert(difference(cloudDay, render(standardProgram, camera, 0.0f)) < 0.1);
+    matrix(camera);
+    weatherValue = {true, 0.8f, 0.0f};
+    assert(average(render(standardProgram, camera, 0.5f)) == 0);
+    weatherValue = {};
+    ppm("build/sky-cloud-day.ppm", cloudDay); ppm("build/sky-cloud-night.ppm", cloudNight);
+    ppm("build/sky-cloud-sunset.ppm", cloudSunset); ppm("build/sky-cloud-twilight.ppm", cloudTwilight);
+    ppm("build/sky-cloud-sunrise.ppm", cloudSunrise);
+    auto& c = targets->clouds;
+    // The fine volume is identical in both seeds while broad density changes.
+    const char* fieldProbeFragment = R"GLSL(#version 310 es
+precision highp float;
+uniform sampler2D field;
+uniform vec4 bounds;
+out vec4 color;
+void main() { color = texture(field, gl_FragCoord.xy / bounds.xy); }
+)GLSL";
+    GLuint fieldProbe = program(lookupVertexShader, fieldProbeFragment);
+    glUseProgram(fieldProbe); glUniform1i(glGetUniformLocation(fieldProbe,"field"),0);
+    const float probeBounds[] = {float(width),float(height),0,0};
+    glUniform4fv(glGetUniformLocation(fieldProbe,"bounds"),1,probeBounds);
+    glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glDisable(GL_BLEND);
+    GLint originalTexture; glGetIntegerv(GL_TEXTURE_BINDING_2D,&originalTexture);
+    glBindTexture(GL_TEXTURE_2D,c.fields[0].texture); glDrawArrays(GL_TRIANGLES,0,3); auto firstDensity=pixels();
+    glBindTexture(GL_TEXTURE_2D,c.fields[1].texture); glDrawArrays(GL_TRIANGLES,0,3); auto nextDensity=pixels();
+    double macroDifference=0;
+    for (unsigned int i=0;i<firstDensity.size();i+=4) {
+        assert(firstDensity[i+3]==nextDensity[i+3]);
+        macroDifference+=std::abs(int(firstDensity[i])-int(nextDensity[i]));
+    }
+    assert(macroDifference>width*height);
+    glBindTexture(GL_TEXTURE_2D,originalTexture); glDeleteProgram(fieldProbe);
+    countedFieldProgram = c.fieldProgram.program; drawArrays = countedDraw; fieldDraws = 0;
+    auto firstField = c.fields[0].texture, secondField = c.fields[1].texture;
+    matrix(camera, 1.0f); render(standardProgram, camera, 0.0f);
+    assert(fieldDraws == 0 && c.fields[0].texture == firstField && c.fields[1].texture == secondField);
+    frameValue = c.epoch + 5000000000ll;
+    render(standardProgram,camera,0.0f); assert(fieldDraws==0 && c.period==0);
+    frameValue = c.epoch + 39999000000ll;
+    auto beforeSeed = render(standardProgram, camera, 0.0f);
+    frameValue = c.epoch + 40000000000ll;
+    auto afterSeed = render(standardProgram, camera, 0.0f);
+    assert(fieldDraws == 1 && c.fields[0].texture == secondField && c.fields[1].texture == firstField);
+    assert(difference(beforeSeed, afterSeed) < 0.2); // No pop at the forty-second boundary.
+    frameValue = c.epoch + 60000000000ll;
+    auto betweenSeeds = render(standardProgram, camera, 0.0f);
+    assert(fieldDraws == 1 && difference(afterSeed, betweenSeeds) > 0.1);
+    frameValue = c.epoch + 168000000000ll;
+    render(standardProgram, camera, 0.0f); assert(fieldDraws == 3); // Both fields recover after skipped periods.
+    // Every detail, sample and resolution choice remains supported, with stable resources.
+    for (int detail = 1; detail <= 3; ++detail) {
+        cloudDetailValue = detail; cloudSamplesValue = detail == 1 ? 8 : detail == 2 ? 24 : 64;
+        cloudResolutionValue = detail-1;
+        auto qualityClouds = render(standardProgram, camera, 0.0f);
+        if (detail == 3) ppm("build/sky-cloud-high-day.ppm", qualityClouds);
+        assert(!cloudFallback && c.detail == detail && c.tileSize == (32 << detail));
+        int divisor = 1 << (2-cloudResolutionValue);
+        assert(c.layer.width == (width+divisor-1)/divisor && c.layer.height == (height+divisor-1)/divisor);
+    }
+    // Low-resolution checkerboard samples recover full-resolution detail over time.
+    cloudDetailValue = 2; cloudSamplesValue = 64; cloudResolutionValue = 2; matrix(camera);
+    auto fullCloudReference = render(standardProgram,camera,0.0f);
+    skyCloudTemporalEnabled = true; cloudResolutionValue = 0;
+    auto firstTemporal = render(standardProgram,camera,0.0f);
+    assert(c.historyValid && !c.resolveFailed && c.age==1);
+    assert(c.history[c.historyIndex].width==width && c.history[c.historyIndex].height==height);
+    auto temporal = firstTemporal;
+    for (int i=0;i<31;++i) temporal=render(i%2 ? standardProgram : instancedProgram,camera,0.0f);
+    double firstError=difference(fullCloudReference,firstTemporal), settledError=difference(fullCloudReference,temporal);
+    std::printf("Quarter-resolution cloud error: first %.3f, reconstructed %.3f/255\n",firstError,settledError);
+    assert(c.age==16 && settledError<firstError);
+    ppm("build/sky-cloud-quarter-first.ppm",firstTemporal); ppm("build/sky-cloud-quarter-reconstructed.ppm",temporal);
+    ppm("build/sky-cloud-full-reference.ppm",fullCloudReference);
+    matrix(camera,0.8f); render(standardProgram,camera,0.0f); assert(c.age==16); // Rotation reprojects history.
+    matrix(camera,0.8f,20); render(standardProgram,camera,0.0f); assert(c.age==16); // Translation does not move this directional layer.
+    camera[0]*=1.5f; render(standardProgram,camera,0.0f); assert(c.age==1); // FOV cut.
+    matrix(camera); render(standardProgram,camera,0.5f); assert(c.age==1); // Time cut.
+    weatherValue={true,0.8f,0};
+    assert(average(render(standardProgram,camera,0.5f))==0 && c.age==1); // No old lit clouds after a weather cut.
+    weatherValue={}; render(standardProgram,camera,0.0f);
+    frameValue+=300000000ll; render(standardProgram,camera,0.0f); assert(c.age==1); // Pause/focus gap.
+    cloudResolutionValue=1; render(standardProgram,camera,0.0f); assert(c.age==1); // Quality change.
+    countedLayerProgram=c.layerProgram.program; countedResolveProgram=c.resolveProgram.program;
+    fieldDraws=layerDraws=resolveDraws=0;
+    const auto disabledPeriod=c.period;
+    const auto disabledPhase=c.phase;
+    cloudsValue=false;
+    for (int i=0;i<4;++i) {
+        frameValue+=40000000000ll; // Disabled clouds must not refresh at seed boundaries.
+        render(i%2 ? instancedProgram : standardProgram,camera,0.0f);
+    }
+    assert(!c.historyValid && c.age==0 && c.period==disabledPeriod && c.phase==disabledPhase);
+    assert(fieldDraws==0 && layerDraws==0 && resolveDraws==0);
+    GLfloat disabledClouds[4];
+    glGetUniformfv(standardProgram,glGetUniformLocation(standardProgram,"ODISkyClouds"),disabledClouds);
+    assert(disabledClouds[0]==0); // The final sky pass skips cloud texture sampling too.
+    std::puts("Clouds disabled: zero density, shading or reconstruction draws across seed boundaries");
+    cloudsValue=true; render(standardProgram,camera,0.0f); assert(c.age==1);
+    c.resolveFailed=true;
+    auto resolveFallback=render(standardProgram,camera,0.0f); assert(!c.historyValid && !cloudFallback);
+    skyCloudTemporalEnabled=false;
+    assert(difference(resolveFallback,render(standardProgram,camera,0.0f))<0.1);
+    c.resolveFailed=false; skyCloudTemporalEnabled=true;
+    cloudDetailValue = 2; cloudSamplesValue = 24; cloudResolutionValue = 1;
+    // All additional texture/sampler units and restrictive viewport state are restored.
+    GLuint cloudTextures[3], cloudSamplers[3]; glGenTextures(3,cloudTextures); glGenSamplers(3,cloudSamplers);
+    for (int i = 0; i < 3; ++i) {
+        glActiveTexture(GL_TEXTURE0+units-2-i); glBindTexture(GL_TEXTURE_2D,cloudTextures[i]);
+        glSamplerParameteri(cloudSamplers[i],GL_TEXTURE_MIN_FILTER,GL_NEAREST_MIPMAP_NEAREST);
+        glBindSampler(units-2-i,cloudSamplers[i]);
+    }
+    glActiveTexture(GL_TEXTURE0); bind(standardProgram,camera);
+    glViewport(3,5,width-7,height-11); glEnable(GL_SCISSOR_TEST); glScissor(4,6,width-9,height-13);
+    glColorMask(GL_FALSE,GL_TRUE,GL_FALSE,GL_TRUE); assert(drawCallback());
+    glGetIntegerv(GL_VIEWPORT,offset); glGetBooleanv(GL_COLOR_WRITEMASK,channels);
+    assert(offset[0]==3 && offset[1]==5 && offset[2]==width-7 && offset[3]==height-11);
+    assert(!channels[0] && channels[1] && !channels[2] && channels[3] && glIsEnabled(GL_SCISSOR_TEST));
+    for (int i = 0; i < 3; ++i) {
+        GLint value; glActiveTexture(GL_TEXTURE0+units-2-i);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D,&value); assert(value==GLint(cloudTextures[i]));
+        glGetIntegerv(GL_SAMPLER_BINDING,&value); assert(value==GLint(cloudSamplers[i]));
+        glBindSampler(units-2-i,0); glBindTexture(GL_TEXTURE_2D,0);
+    }
+    glActiveTexture(GL_TEXTURE0); glDeleteTextures(3,cloudTextures); glDeleteSamplers(3,cloudSamplers);
+    glViewport(0,0,width,height); glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE); glDisable(GL_SCISSOR_TEST);
+    matrix(camera); c.failed = true;
+    assert(difference(clearCloudReference,render(standardProgram,camera,0.0f)) < 0.1 && cloudFallback);
+    c.failed = false; cloudsValue = false;
+    assert(difference(clearCloudReference,render(standardProgram,camera,0.0f)) < 0.1 && !cloudFallback);
+    drawArrays = glDrawArrays;
+    skyCloudTemporalEnabled = false;
+    skyLookupEnabled = skyHalfResolutionEnabled = skyReducedSamplesEnabled = false;
     // A foreground depth region already present must survive a sky drawn at far depth.
     for (int mask = 0; mask < 8; ++mask) {
+        cloudsValue = mask == 7;
         skyLookupEnabled = mask & 1; skyHalfResolutionEnabled = mask & 2; skyReducedSamplesEnabled = mask & 4;
         matrix(camera); bind(standardProgram,camera);
         glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE); glClearDepthf(1); glClearColor(1,0,1,1);
@@ -253,6 +466,7 @@ int main(int argc, char** argv) {
         assert(foreground[center]==255 && foreground[center+1]==0 && foreground[center+2]==0);
     }
     skyLookupEnabled = skyHalfResolutionEnabled = skyReducedSamplesEnabled = false;
+    cloudsValue = false;
     // Shared Clouds fragment must link with a normal native vertex and retain its colors.
     const char* cloudVertex=R"GLSL(#version 310 es
 uniform vec4 CloudColor;

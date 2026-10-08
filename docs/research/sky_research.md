@@ -32,8 +32,7 @@ planes, foreground depth, native Clouds compatibility, toggle fallback and GL
 state restoration. Environment separately reports compilation, linking and an
 observed full-screen draw. The owner confirmed the replacement looks good in
 Minecraft. The atmosphere now blends across the apparent horizon over one
-degree; that adjustment still needs visual confirmation. Procedural clouds and
-its menu toggle have been removed, including cloud noise and clock reads.
+degree; that adjustment still needs visual confirmation. Optional cached GPU clouds now add two separate layers: lower volumetric cumulus and higher wispy cirrus. See the cloud section below.
 The custom sun has an angular glow; a saved vanilla sun/moon toggle defaults
 OFF and forwards native SunMoon materials while suppressing procedural disks/glow.
 Sun disk/glow fade with sun elevation and are softly masked below the horizon.
@@ -78,3 +77,35 @@ GLES tests alone can vary quality to compare all seven combinations across day, 
 standard/instanced parity, state restoration, cached lookup reuse across small time changes and day rollover, changed time
 and sample quality, fallback, offset/odd viewports and restoring the baseline.
 Hardware performance and visual quality still require in-game comparison.
+
+## Optional cached cloud layers
+
+Clouds defaults OFF, including migration of the previously ignored cloud flag. AUTOGG31 keeps that toggle at field 48 and appends detail, view samples and resolution at fields 60–62. Controls are conditional on Environment, Physically inspired sky and Clouds. The existing 16-control Environment page accommodates all controls, including status.
+
+Two RGBA16F GPU atlases store a broad cumulus coverage field and detailed 3D density field as 16 height slices, a wispy anisotropic cirrus field, and a fixed periodic small-scale detail volume in alpha. Cumulus combines coverage, fractal value noise and cellular edge erosion, with a 1.2–4.0 directional height range (3.5 times the original depth) and density-dependent tower tops; cirrus uses elongated noise with curved, patchy coverage. All generation runs in a fragment shader. Atlas tile size is 64/128/256 for Low/Medium/High, with total density storage 1/4/16 MiB per owning context. Seeds smooth-blend over forty seconds; after the initial pair, only one atlas redraws at each boundary. Camera rotation does not invalidate density. Skipped periods regenerate the pair; blending stays continuous at normal boundaries. Animation reuses the frame limiter timestamp, without a clock syscall or GPU readback. Fixed celestial time does not freeze cloud evolution.
+
+A quarter/half/full-resolution RGBA16F layer is shaded for the current camera each draw (default half), using 8–64 view samples (default 24). Two distance detail levels blend detailed/coarse density and reduce distant sample counts; horizon/distance fades prevent a hard cutoff. Three bounded sun-path density samples shade cumulus interiors; forward/back scattering lobes enhance sun-facing light, with three exponential attenuation terms approximating softer multiple scattering. Light transitions from warm sunrise/sunset to daylight, dim twilight and dark blue-grey ambient/moon illumination at night. Cirrus sits at a higher directional altitude of 6.2 and composites behind cumulus. Clouds obscure procedural celestial details and follow the Weather changer night/storm darkening. The layer is composited before gamma conversion. Two extra cached alpha samples provide fixed cellular fine-scale density erosion, fading with distance; sunlight samples retain coarse density for lower cost. The alpha volume uses fixed seeds and is identical in both animated atlases, including at transitions. High detail strengthens erosion. Per-pixel march offsets reduce visible horizontal sample bands; low-resolution temporal sampling cycles their phase. No extra texture, render pass, texture unit or CPU noise work is added for this detail.
+
+This is a direction-anchored sky approximation: no wind translation, camera-position parallax, terrain shadows, physically integrated multiple scattering or full weather simulation. Density generation is cached, but view-dependent shading runs each draw; Quarter/Half resolution reuse GPU screen history with camera reprojection, while Full renders directly. CPU work is limited to bounded settings/time bookkeeping and GL calls. GPU cost and frame pacing remain hardware-dependent, including the periodic density refresh. Cloud passes reuse the atmosphere's offscreen GL-state scope and the existing four-context resource bound; unsupported cloud resources leave the sky running without clouds and report a settings status.
+
+GLES checks cover both layouts, day/dawn/dusk/twilight/night pixels, detail/sample/resolution choices, identical static alpha detail in both evolving seed fields, resource reuse under camera changes, exactly one density draw at a normal forty-second boundary, smooth boundary pixels, skipped-period recovery, toggle/failure fallback, hostile texture/sampler units and offset/clipped viewport restoration. Temporal checks also cover accumulation, reduced error against full-resolution rendering, camera rotation, FOV/time/weather cuts, quality/toggle resets, frame gaps and fallback. Larger software-rendered previews are generated in build/sky-cloud-*.ppm. In-game appearance, native celestial routing, sun alignment and RTX frame pacing still need owner review.
+
+## Photon styling and low-resolution reconstruction
+
+Reference inspected: sixthsurge/photon commit `15458c0937f8647c37eb6a501bef5eb3bf3da31b`.
+The independent implementation uses rounded coverage banks, cellular erosion,
+curled cirrus, forward/back light scattering and softer interior illumination.
+No Photon source or assets are copied. Reference techniques are visible in its
+[cumulus shader](https://github.com/sixthsurge/photon/blob/main/shaders/include/sky/clouds/cumulus.glsl)
+and [cloud upscaler](https://github.com/sixthsurge/photon/blob/main/shaders/program/d2_clouds_upscaling.fsh).
+
+Quarter/Half shade a cycling subpixel grid, then resolve into ping-pong full-size
+RGBA16F history. Previous camera matrices reproject the direction; neighborhood
+clamping and opacity rejection limit stale edges. Projection changes, celestial
+or weather jumps, quality changes, resize and gaps of 250 ms reset accumulation.
+This adds one fullscreen GPU pass and 16 bytes per display pixel of history
+storage (about 32 MiB at 1080p) per owning context. CPU work remains bounded matrix
+and settings bookkeeping with GL calls; no readback or CPU cloud generation.
+Unsupported resolve resources fall back to the ordinary cloud layer.
+Visual similarity and RTX performance require an in-game comparison; this is
+Photon-inspired styling rather than an identical renderer.

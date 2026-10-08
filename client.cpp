@@ -15,6 +15,7 @@
 #include "tablist.h"
 #include "particles.h"
 #include "environment.h"
+#include "projection_jitter.h"
 #include "popup.h"
 #include "custom_menu.h"
 #include "client_modules.h"
@@ -33,6 +34,9 @@ bool blurFpsAverage = false;
 int blurAverageHz = 60;
 int blurStrength = 30;
 bool fpsLimitEnabled = false;
+bool jitterEnabled = false;
+int jitterSampleMode = 0;
+bool fpsNative = false;
 int fpsLimit = 120;
 bool centerCursorEnabled = false;
 bool cursorWasCaptured = false;
@@ -101,6 +105,7 @@ void onFrame(void*, void*, void*) {
     // Inventory screens can release mouse capture while Minecraft is still
     // rendering. Keep the cap active there and while the client menu is open.
     auto limiterTrace=render_frame_trace_stamp();
+    fps_limiter_native_update(client_fps_limit_enabled() && client_fps_native(), client_fps_value());
     fps_limiter_wait(__atomic_load_n(&fpsLimitEnabled, __ATOMIC_RELAXED), true,
                      __atomic_load_n(&fpsLimit, __ATOMIC_RELAXED));
     render_frame_trace_record(FrameLimiter,limiterTrace);
@@ -120,6 +125,8 @@ void onFrame(void*, void*, void*) {
     particles_update(zoomGameplay());
     tablist_render(zoomGameplay(), fps_limiter_frame_timestamp_ns());
     display_layout_begin_frame();
+    auto viewport = display_layout_viewport();
+    projection_jitter_frame(viewport.width, viewport.height);
     fps_display_render(isSprintReady() && autosprint_has_focus(), fps_limiter_frame_timestamp_ns());
     custom_menu_render();
     popup_render(isSprintReady() && autosprint_has_focus(), fps_limiter_frame_timestamp_ns());
@@ -245,6 +252,12 @@ void client_set_fps_limit(bool value) {
     client_settings_set_fps_limit(value, __atomic_load_n(&fpsLimit, __ATOMIC_RELAXED));
 }
 bool client_fps_limit_enabled() { return __atomic_load_n(&fpsLimitEnabled, __ATOMIC_RELAXED); }
+void client_set_fps_native(bool value) {
+    __atomic_store_n(&fpsNative, value, __ATOMIC_RELAXED);
+    client_settings_set_fps_native(value);
+}
+bool client_fps_native() { return __atomic_load_n(&fpsNative, __ATOMIC_RELAXED); }
+bool client_fps_native_unavailable() { return client_fps_native() && !fps_limiter_native_supported(); }
 void client_set_analog(bool value) {
     if (!analog_input_supported()) return;
     __atomic_store_n(&analogEnabled, value, __ATOMIC_RELAXED);
@@ -288,6 +301,18 @@ void client_set_fps_value(int value) {
 }
 int client_fps_value() { return __atomic_load_n(&fpsLimit, __ATOMIC_RELAXED); }
 
+void client_set_jitter(bool value) { __atomic_store_n(&jitterEnabled, value, __ATOMIC_RELAXED); }
+bool client_jitter_enabled() { return __atomic_load_n(&jitterEnabled, __ATOMIC_RELAXED); }
+void client_set_jitter_sample_mode(int value) {
+    if (value < 0) value = 0;
+    if (value > 2) value = 2;
+    __atomic_store_n(&jitterSampleMode, value, __ATOMIC_RELAXED);
+}
+int client_jitter_sample_mode() { return __atomic_load_n(&jitterSampleMode, __ATOMIC_RELAXED); }
+bool client_jitter_active() {
+    return client_jitter_enabled() && zoomGameplay();
+}
+
 extern "C" __attribute__((visibility("default"))) void mod_preinit() {
     if (!initialized) {
         initialized = true;
@@ -298,8 +323,13 @@ extern "C" __attribute__((visibility("default"))) void mod_preinit() {
 
 extern "C" __attribute__((visibility("default"))) void mod_init() {
     auto_gg_init();
+    bool fpsEnabled;
+    int fpsValue;
+    client_settings_get_fps_limit(&fpsEnabled, &fpsValue);
+    fps_limiter_init(fpsEnabled && client_settings_get_fps_native());
     zoom_init();
     gpu_shader_services_init();
+    projection_jitter_init();
     environment_init();
     render_init();
     tablist_init();
@@ -314,9 +344,6 @@ extern "C" __attribute__((visibility("default"))) void mod_init() {
     bool sprint, blur;
     int strength;
     client_settings_get_modules(&sprint, &blur, &strength);
-    bool fpsEnabled;
-    int fpsValue;
-    client_settings_get_fps_limit(&fpsEnabled, &fpsValue);
     bool fpsAverage, screenBlur;
     int averageHz;
     client_settings_get_blur(&fpsAverage, &averageHz, &screenBlur);
@@ -325,6 +352,8 @@ extern "C" __attribute__((visibility("default"))) void mod_init() {
     __atomic_store_n(&blurStrength, strength, __ATOMIC_RELAXED);
     __atomic_store_n(&fpsLimitEnabled, fpsEnabled, __ATOMIC_RELAXED);
     __atomic_store_n(&fpsLimit, fpsValue, __ATOMIC_RELAXED);
+    __atomic_store_n(&fpsNative, client_settings_get_fps_native(), __ATOMIC_RELAXED);
+    fps_limiter_native_update(fpsEnabled && client_fps_native(), fpsValue);
     __atomic_store_n(&blurFpsAverage, fpsAverage, __ATOMIC_RELAXED);
     __atomic_store_n(&blurAverageHz, averageHz, __ATOMIC_RELAXED);
     __atomic_store_n(&screenBlurEnabled, screenBlur, __ATOMIC_RELAXED);

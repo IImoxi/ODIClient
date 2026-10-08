@@ -371,26 +371,122 @@ int main(int argc, char** argv) {
     client_settings_set_blur(true, 144, true);
     client_settings_set_zoom(true, 90, 300, 25);
     client_settings_set_particles(true);
+    client_settings_set_fps_native(true);
     client_settings_set_cc_utils({true, true, true});
-    client_settings_set_environment({true, true, true, 18000, 240, 75, 80, true, false, true, true, true, true});
-    client_settings_set_fps_display({true, true, 1750, 5, 3});
+    client_settings_set_environment({true, true, true, 18000, 240, 75, 80, true, true, true, true, true, true, true, 75, 3, 48, 2, true});
+    client_settings_set_fps_display({true, true, 1750, 5, 3, true});
     lobby.enabled = true; copy(lobby.rules, "steve?/hub,alex?#/hello", sizeof(lobby.rules));
     client_settings_set_lobby_watch(lobby);
     client_settings_set_render({true, true, false, 80, 160, true, 96});
     auto_gg_update(true, true);
-    reset(); enabled = false; savedRender = {}; savedParticles = false; savedFpsDisplay = {}; savedEnvironment = {}; savedCCUtils = {}; loadConfig();
+    reset(); enabled = false; savedRender = {}; savedParticles = false; savedFpsDisplay = {}; savedEnvironment = {}; savedCCUtils = {}; savedFpsNative = false; loadConfig();
     assert(savedCCUtils.enabled && savedCCUtils.partyInvites && savedCCUtils.playerPing);
     assert(client_settings_get_fps_display().enabled && client_settings_get_fps_display().low
            && client_settings_get_fps_display().intervalMs == 1750
-           && client_settings_get_fps_display().fontScale == 5 && client_settings_get_fps_display().anchor == 3);
+           && client_settings_get_fps_display().fontScale == 5 && client_settings_get_fps_display().anchor == 3 && client_settings_get_fps_display().mojangles);
+    assert(savedEnvironment.weather && savedEnvironment.weatherAmount == 75 && savedEnvironment.skyQuarterResolution);
+    assert(savedEnvironment.clouds && savedEnvironment.cloudDetail == 3
+           && savedEnvironment.cloudSamples == 48 && savedEnvironment.cloudResolution == 2);
+    // Truncated or malformed cloud quality must reject the whole config.
+    FILE* cloudConfig = std::fopen(configPath, "r"); assert(cloudConfig);
+    char cloudLines[64][512]{};
+    for (auto& line : cloudLines) assert(std::fgets(line,sizeof(line),cloudConfig));
+    std::fclose(cloudConfig);
+    // Previous configs keep the existing half-resolution default.
+    cloudConfig = std::fopen(configPath, "w"); assert(cloudConfig);
+    std::fputs("AUTOGG31\n", cloudConfig);
+    for (int i = 1; i < 63; ++i) std::fputs(cloudLines[i], cloudConfig);
+    std::fclose(cloudConfig); loadConfig();
+    assert(!savedEnvironment.skyQuarterResolution && savedEnvironment.cloudResolution == 2);
+    for (int invalidSlot : {60, 61, 62, 63}) {
+        cloudConfig = std::fopen(configPath,"w"); assert(cloudConfig);
+        for (int i = 0; i < 64; ++i) std::fputs(i == invalidSlot ? "invalid\n" : cloudLines[i],cloudConfig);
+        std::fclose(cloudConfig); loadConfig();
+        assert(savedEnvironment.clouds && savedEnvironment.cloudDetail == 3 && savedEnvironment.cloudSamples == 48);
+    }
+    cloudConfig = std::fopen(configPath,"w"); assert(cloudConfig);
+    for (int i = 0; i < 62; ++i) std::fputs(cloudLines[i],cloudConfig);
+    std::fclose(cloudConfig); loadConfig(); assert(savedEnvironment.clouds);
+    saveConfig();
+    assert(client_settings_get_fps_native());
+    // Invalid native flag leaves previous settings intact.
+    FILE* pacingConfig = std::fopen(configPath, "r"); assert(pacingConfig);
+    char pacingLines[60][512]{};
+    for (auto& line : pacingLines) assert(std::fgets(line, sizeof(line), pacingConfig));
+    std::fclose(pacingConfig);
+    pacingConfig = std::fopen(configPath, "w"); assert(pacingConfig);
+    for (int i = 0; i < 56; ++i) std::fputs(pacingLines[i], pacingConfig);
+    std::fputs("invalid\n", pacingConfig); std::fclose(pacingConfig);
+    loadConfig(); assert(client_settings_get_fps_native());
+    // Old enabled adaptive settings are ignored and saved back as disabled.
+    pacingConfig = std::fopen(configPath, "w"); assert(pacingConfig);
+    std::fputs("AUTOGG30\n", pacingConfig);
+    for (int i = 1; i < 58; ++i) std::fputs(pacingLines[i], pacingConfig);
+    std::fputs("1\n7\n", pacingConfig); std::fclose(pacingConfig);
+    savedFpsNative = false; dirty = false; loadConfig();
+    assert(savedFpsNative && dirty);
+    saveConfig();
+    pacingConfig = std::fopen(configPath, "r"); assert(pacingConfig);
+    for (auto& line : pacingLines) assert(std::fgets(line, sizeof(line), pacingConfig));
+    std::fclose(pacingConfig);
+    assert(std::strcmp(pacingLines[58], "0\n") == 0 && std::strcmp(pacingLines[59], "5\n") == 0);
+    // Malformed retired slots still reject the entire config update.
+    for (int invalidSlot : {58, 59}) {
+        pacingConfig = std::fopen(configPath, "w"); assert(pacingConfig);
+        for (int i = 0; i < 60; ++i)
+            std::fputs(i == invalidSlot ? "invalid\n" : pacingLines[i], pacingConfig);
+        std::fclose(pacingConfig); loadConfig();
+        assert(savedFpsNative);
+    }
+    // The retired GPU flag is ignored during version 29 migration.
+    pacingConfig = std::fopen(configPath, "w"); assert(pacingConfig);
+    std::fputs("AUTOGG29\n", pacingConfig);
+    for (int i = 1; i < 57; ++i) std::fputs(pacingLines[i], pacingConfig);
+    std::fputs("1\n", pacingConfig); std::fclose(pacingConfig);
+    dirty = false; loadConfig();
+    assert(savedFpsNative && dirty);
+    // Version 28 preserves the fixed low input delay option.
+    pacingConfig = std::fopen(configPath, "w"); assert(pacingConfig);
+    std::fputs("AUTOGG28\n", pacingConfig);
+    for (int i = 1; i < 57; ++i) std::fputs(pacingLines[i], pacingConfig);
+    std::fclose(pacingConfig); dirty = false; loadConfig();
+    assert(client_settings_get_fps_native() && dirty);
+    pacingConfig = std::fopen(configPath, "w"); assert(pacingConfig);
+    std::fputs("AUTOGG27\n", pacingConfig);
+    for (int i = 1; i < 56; ++i) std::fputs(pacingLines[i], pacingConfig);
+    std::fclose(pacingConfig); dirty = false; loadConfig();
+    assert(!client_settings_get_fps_native() && dirty && savedEnvironment.weatherAmount == 75);
+    saveConfig();
+    // Version 25 retains FPS settings and defaults the new font choice to Inter.
+    FILE* fontConfig = std::fopen(configPath, "r"); assert(fontConfig);
+    char fontLines[54][512]{};
+    for (auto& line : fontLines) assert(std::fgets(line, sizeof(line), fontConfig));
+    std::fclose(fontConfig);
+    fontConfig = std::fopen(configPath, "w"); assert(fontConfig);
+    std::fputs("AUTOGG25\n", fontConfig);
+    for (int i = 1; i < 53; ++i) std::fputs(fontLines[i], fontConfig);
+    std::fclose(fontConfig); dirty = false; loadConfig();
+    assert(!savedFpsDisplay.mojangles && savedFpsDisplay.enabled
+           && savedFpsDisplay.anchor == 3 && dirty);
+    savedFpsDisplay.mojangles = true;
+    fontConfig = std::fopen(configPath, "w"); assert(fontConfig);
+    for (int i = 0; i < 53; ++i) std::fputs(fontLines[i], fontConfig);
+    std::fputs("invalid\n", fontConfig); std::fclose(fontConfig);
+    loadConfig(); assert(savedFpsDisplay.mojangles); // Invalid config is rejected.
+    saveConfig();
     auto environment = client_settings_get_environment();
     assert(environment.enabled && environment.time && environment.fog && environment.ticks == 18000
            && environment.hue == 240 && environment.saturation == 75 && environment.value == 80
            && environment.sky && !environment.clouds && environment.vanillaCelestials
-           && environment.skyLookup && environment.skyHalfResolution && environment.skyReducedSamples);
+           && environment.skyLookup && environment.skyHalfResolution && environment.skyReducedSamples
+           && !environment.weather && environment.weatherAmount == 0);
     client_settings_set_environment({true, true, true, -1, 999, -1, 999});
     assert(savedEnvironment.ticks == 0 && savedEnvironment.hue == 360
            && savedEnvironment.saturation == 0 && savedEnvironment.value == 100);
+    auto invalidClouds = savedEnvironment;
+    invalidClouds.cloudDetail = 99; invalidClouds.cloudSamples = 29; invalidClouds.cloudResolution = -1;
+    client_settings_set_environment(invalidClouds);
+    assert(savedEnvironment.cloudDetail == 3 && savedEnvironment.cloudSamples == 32 && savedEnvironment.cloudResolution == 0);
     assert(client_settings_get_particles());
     assert(client_settings_get_lobby_watch().enabled && std::strcmp(client_settings_get_lobby_watch().rules, "steve?/hub,alex?#/hello") == 0);
     assert(enabled && std::strcmp(trigger, "Victory!") == 0 && std::strcmp(response, "good game \xc3\xa9") == 0);
@@ -510,7 +606,7 @@ int main(int argc, char** argv) {
     auto_gg_update(true, true);
     FILE* migrated = std::fopen(configPath, "r"); assert(migrated);
     char version[16]{};
-    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG25\n") == 0);
+    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG32\n") == 0);
     std::fclose(migrated);
     FILE* previous = std::fopen(configPath, "w"); assert(previous);
     std::fputs("AUTOGG5\n0\nVictory!\ngg\n0\n0\n30\n0\n120\n0\n60\n0\n1\n90\n", previous);
@@ -549,7 +645,7 @@ int main(int argc, char** argv) {
     auto_gg_update(true, true);
     migrated = std::fopen(configPath, "r"); assert(migrated);
     std::memset(version, 0, sizeof(version));
-    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG25\n") == 0);
+    assert(std::fgets(version, sizeof(version), migrated) && std::strcmp(version, "AUTOGG32\n") == 0);
     std::fclose(migrated);
     client_settings_set_tablist(false); saveConfig();
     savedTablist = true; loadConfig(); assert(!client_settings_get_tablist());

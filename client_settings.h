@@ -9,6 +9,8 @@ void client_settings_get_modules(bool* sprint, bool* blur, int* strength);
 void client_settings_set_modules(bool sprint, bool blur, int strength);
 void client_settings_get_fps_limit(bool* enabled, int* limit);
 void client_settings_set_fps_limit(bool enabled, int limit);
+bool client_settings_get_fps_native();
+void client_settings_set_fps_native(bool enabled);
 void client_settings_get_blur(bool* fpsAverage, int* averageHz, bool* screenBlur);
 void client_settings_set_blur(bool fpsAverage, int averageHz, bool screenBlur);
 
@@ -58,6 +60,7 @@ struct FpsDisplaySettings {
     int intervalMs = 1000;
     int fontScale = 2; // ui_scale tier index; 2 = 1x.
     int anchor = 0; // DisplayAnchor order: TL, TR, BL, BR.
+    bool mojangles = false;
 };
 FpsDisplaySettings client_settings_get_fps_display();
 void client_settings_set_fps_display(FpsDisplaySettings settings);
@@ -65,9 +68,13 @@ void client_settings_set_fps_display(FpsDisplaySettings settings);
 struct EnvironmentSettings {
     bool enabled = false, time = false, fog = false;
     int ticks = 6000, hue = 0, saturation = 0, value = 100;
-    bool sky = false, clouds = true, vanillaCelestials = false; // clouds: legacy config slot, ignored by renderer.
+    bool sky = false, clouds = false, vanillaCelestials = false;
     // Legacy config slots: preserved for compatibility, renderer always optimizes.
     bool skyLookup = false, skyHalfResolution = false, skyReducedSamples = false;
+    bool weather = false;
+    int weatherAmount = 0; // 0 clear, 50 rain, 100 thunder.
+    int cloudDetail = 2, cloudSamples = 24, cloudResolution = 1; // Low/medium/high; 8–64; quarter/half/full.
+    bool skyQuarterResolution = false;
 };
 EnvironmentSettings client_settings_get_environment();
 void client_settings_set_environment(EnvironmentSettings settings);

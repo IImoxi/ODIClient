@@ -24,13 +24,13 @@ clang++ "${flags[@]}" -DHOST_API api_stubs.cpp \
 # Host adapters resolve Linux APIs dynamically; the final mod stays Android x86_64.
 host_flags=(-std=c++17 -O2 -fPIC -fvisibility=hidden -fno-exceptions -fno-rtti
             -fno-stack-protector -Wall -Wextra -Werror)
-host_sources=(autosprint motion_blur custom_menu menu_pages custom_font analog_input auto_gg chat fps_limiter fps_display display_layout zoom hook_manager render render_frame_trace render_gl_trace gpu_shader_services tablist skin_image flarial_presence particles popup environment player_target sky_renderer)
+host_sources=(autosprint motion_blur custom_menu menu_pages custom_font analog_input auto_gg chat fps_limiter fps_display display_layout zoom hook_manager render render_frame_trace render_gl_trace gpu_shader_services tablist skin_image flarial_presence particles popup environment player_target sky_renderer projection_jitter)
 host_objects=()
 for source in "${host_sources[@]}"; do
     extra_flags=()
     case "$source" in
         custom_font) extra_flags=(-I/usr/include/freetype2) ;;
-        auto_gg|chat|fps_limiter|fps_display|display_layout|zoom|hook_manager|render|render_frame_trace|render_gl_trace|gpu_shader_services|tablist|skin_image|flarial_presence|particles|popup|environment|player_target|sky_renderer) extra_flags=(-ffreestanding) ;;
+        auto_gg|chat|fps_limiter|fps_display|display_layout|zoom|hook_manager|render|render_frame_trace|render_gl_trace|gpu_shader_services|tablist|skin_image|flarial_presence|particles|popup|environment|player_target|sky_renderer|projection_jitter) extra_flags=(-ffreestanding) ;;
     esac
     clang++ "${host_flags[@]}" "${extra_flags[@]}" -c "$source.cpp" -o "build/$source.o"
     host_objects+=("build/$source.o")

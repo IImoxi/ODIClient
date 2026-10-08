@@ -13,7 +13,7 @@ input/render/lifecycle callbacks in `client.cpp`; declare controls in `menu_page
 | Find a loaded player under the crosshair | `player_target.h`: `player_target_name` | Exact-build camera ray and synchronous player iteration; call only inside `ChatLiveListener`, outside UI/settings locks. Copies the nearest player name without a reach limit; never retains camera, level, client or actor pointers. CC Utils queues only a short-lived click and numeric client identity. |
 | Read physical Shift | `autosprint.h`: `autosprint_shift_down` | Focused SDL3/X11 key state, including either Shift key; use from launcher input callbacks. |
 | Ask for confirmation | `popup.h`: `popup_show`, `popup_cancel_if` | Lobby Scanner and CC Utils. Copies title/message; one pending prompt; false means rejected/busy. Timeout answers No. Cancel only your callback/context so you do not dismiss another module's prompt. |
-| Build a settings page | `custom_menu.h`: `newPage`, `newTile`, fluent controls | Existing modules share scrolling, layout, input and animations. Declare once in `declare_menu_pages`; 36 pages/tiles, 16 controls per page. Getters must be quick reads. |
+| Build a settings page | `custom_menu.h`: `newPage`, `newTile`, fluent controls | Existing modules share scrolling, layout, input and animations. Declare once in `declare_menu_pages`; 36 pages/tiles, 17 controls per page. Getters must be quick reads. |
 | Edit a text setting | `MenuPage::textBox(label, initial, onChange, multiline, commaBubbles)` | All modules share cursor editing; optional comma bubbles affect display only. `onChange` receives the copied comma-delimited text outside the UI lock. |
 | Select and stack corner displays | `custom_menu.h`: `MenuPage::anchor`; `display_layout.h`: frame reset, viewport, placement | FPS Display. Four corner dots in a 16:9 rectangle; each visible display claims its size each frame in stable order. Top stacks grow down; bottom stacks grow up. Frame-thread only; no registry or allocation. |
 | Draw a rounded fill, outline, blurred panel or divider | `panel_renderer.h`: `PanelPaint`, `draw_gl_panel`, `draw_gl_divider` | Menu, Tablist and popup. Bottom-left framebuffer coordinates; preserves touched GL state. Use `inheritScissor` for clipped content. |
@@ -87,6 +87,13 @@ newPage("My module")
 its group and do not start another group. Use the optional predicate to gate
 controls on a dependent toggle as shown above. `choice()` and `dropdown()` are
 for named alternatives such as Trail/FPS average and Inter/Mojangles.
+`dropdown()` uses a compact text-field surface that extends around its open
+options, with a shared settings-button outline, a drawn chevron, a faint divider,
+left-aligned labels and animated settings-color highlights. Rows adjoin without
+gaps; their fills meet the inside of the outline and share its corner geometry.
+Clicking outside an open dropdown dismisses it and consumes that click without
+changing the selection. Its height, radius, text padding and highlight opacities
+live in `menu_style.h`.
 
 `MenuPage::text()` uses smaller description text and compact row spacing,
 configured by the `description*Percent` constants in `menu_style.h`.
@@ -218,3 +225,18 @@ as the new `from` and restart the timestamp.
   preserve these before replacing them.
 
 No module registry or general event bus is needed for the current feature set.
+
+## Environment weather
+
+`environment_weather()` in `environment.h` returns copied `EnvironmentWeather`
+values: enabled, rain and thunder in 0–1. It is a side-effect-free atomic snapshot
+usable from any thread. Environment owns the exact-build Weather tick interception;
+callers must reuse this API rather than installing another weather hook. The hook
+forwards native simulation with its original interpolation values, then applies the
+local override only to a verified client Overworld. No native pointers leave the
+callback; restoration tracks numeric identities and copied scalar values for the
+launcher's one live client Overworld. Disable takes effect on its next weather tick.
+
+The sky renderer consumes this copied snapshot through its existing fragment
+uniform to apply rain overcast and thunder darkening after atmosphere caching.
+The clear atmosphere lookup remains reusable across weather changes.

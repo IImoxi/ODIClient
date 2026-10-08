@@ -90,6 +90,17 @@ floor_target = floor + len(array('floorLoad')) + struct.unpack('<i', read(floor 
 assert floor_target == integer('floorLoadTarget') and struct.unpack('<f', read(floor_target, 4))[0] == 5
 print(f'PASS: Minecraft {version} matches the centralized AutoGG and Zoom profile')
 
+for address, signature in (('intervalSite', 'intervalStore'),
+                           ('intervalCalculation', 'calculationSignature'), ('waitSite', 'waitSignature')):
+    assert read(integer(address), len(array(signature))) == array(signature)
+# Decode the actual RIP-relative constant, independently of the relay fixture.
+calculation = integer('intervalCalculation')
+constant = calculation + 18 + struct.unpack('<i', read(calculation + 14, 4))[0]
+assert constant == 0x27be554
+assert struct.unpack('<f', read(constant, 4))[0] == 1000.0
+assert integer('intervalSite') & 63 <= 56
+print('PASS: Fixed native FPS pacing gates and interval conversion')
+
 assert relocations[integer('listVtable') + integer('listInvokeSlot')] == integer('listCallback')
 for address, signature in (('listCallback', 'listEntry'), ('listCaptureSite', 'listCaptureSignature'),
                            ('listOutputSelect', 'listOutputSignature'),
@@ -153,10 +164,10 @@ for section in sections:
 assert not program_imports
 print('PASS: Shader program import symbols, PLT gates and lifecycle imports')
 
-# Sky source/compile and instanced/indirect draw lookup use their own gated imports.
+# Sky, projection jitter and instanced/indirect draw lookup use gated imports.
 sky_imports = {}
 for namespace, symbol in (('shaderSource', 'glShaderSource'), ('shaderCompile', 'glCompileShader'),
-                          ('drawProc', 'eglGetProcAddress')):
+                          ('drawProc', 'eglGetProcAddress'), ('projectionJitter', 'glUniformMatrix4fv')):
     scope = re.search(r'namespace ' + namespace + r' \{(.*?)\n\}', profile, re.S)[1]
     slot = int(re.search(r' slot = (0x[0-9a-f]+);', scope)[1], 16)
     plt = int(re.search(r' plt = (0x[0-9a-f]+);', scope)[1], 16)
@@ -175,7 +186,7 @@ for section in sections:
         name_offset = struct.unpack_from('<I', image, symbols[4]+(info >> 32)*symbols[9])[0]+strings[4]
         assert image[name_offset:image.find(b'\0', name_offset)].decode() == sky_imports.pop(address)
 assert not sky_imports
-print('PASS: Sky shader source/compile and EGL draw-procedure import gates')
+print('PASS: Sky shader source/compile, projection jitter and EGL draw-procedure import gates')
 
 # Native GL submission entry/ABI and presentation import.
 assert relocations[integer('submitSlot')] == integer('submitFunction')
@@ -259,3 +270,11 @@ assert read(relocations[info + 8], 14) == b'11ClientLevel\0'
 assert read(integer('playerNameRead'), 7) == bytes.fromhex('f680') + struct.pack('<I', integer('actorName')) + b'\x01'
 assert read(integer('shapeRead'), 7) == bytes.fromhex('488b87') + struct.pack('<I', integer('actorShape'))
 print('PASS: Player targeting camera/matrix ABI, Level player iteration, Actor AABB and name reads')
+
+assert read(integer('weatherTickFunction'), len(array('weatherTickSignature'))) == array('weatherTickSignature')
+assert read(integer('weatherClientCheck'), len(array('weatherClientSignature'))) == array('weatherClientSignature')
+assert integer('weatherClientLevelTable') == integer('clientLevelTable')
+print('PASS: Weather tick entry and client/server LevelData-write branch')
+assert read(integer('weatherInterpolation'), len(array('weatherInterpolationSignature'))) == array('weatherInterpolationSignature')
+assert read(0x13aba195, 1) == b'\xe8'
+assert 0x13aba195 + 5 + struct.unpack('<i', read(0x13aba196, 4))[0] == integer('weatherTickFunction')

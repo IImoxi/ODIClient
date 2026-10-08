@@ -50,6 +50,15 @@ constexpr float textBoxOutlineOpacity = 0.15f;
 constexpr float textBoxFocusedOutlineOpacity = 0.15f;
 constexpr float textBoxOutlineThickness = 2.0f; // Pixels; zero disables outlines.
 constexpr float textBoxRadiusPercent = 0.7f; // Percentage of panel height.
+// Dropdowns share the text-field surface; options use the settings hover colors.
+constexpr float dropdownRadiusPercent = 0.7f;
+constexpr int dropdownButtonHeightPercent = 6;
+constexpr float dropdownTextPaddingPercent = 2.0f;
+constexpr float dropdownArrowSizePercent = 1.5f;
+constexpr float dropdownArrowThicknessPercent = 0.4f;
+constexpr float dropdownButtonOpacity = 0.0f;
+constexpr float dropdownSelectedOpacity = 0.1f;
+constexpr float dropdownHoverOpacity = 0.2f;
 constexpr MenuColor textBubbleBackground = rgb(0xffffff);
 constexpr MenuColor textBubbleOutline = rgb(0xffffff);
 constexpr float textBubbleBackgroundOpacity = 0.0f;

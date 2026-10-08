@@ -12,6 +12,7 @@
 #include "tablist.h"
 #include "particles.h"
 #include "ui_scale.h"
+#include "projection_jitter.h"
 
 namespace {
 void zoomMultiplier(int tenths, char* value) {
@@ -30,9 +31,39 @@ void fontScaleLabel(int index, char* value) {
     *value = 0;
 }
 bool trailMode() { return !client_blur_average(); }
+void jitterSamplesLabel(int mode, char* value) {
+    value[0] = static_cast<char>('0' + (2 << mode));
+    value[1] = 0;
+}
+bool cloudsVisible() { return client_environment_sky() && client_environment_clouds(); }
+void cloudDetailLabel(int level, char* value) {
+    const char* text = level == 1 ? "Low" : level == 2 ? "Medium" : "High";
+    while (*text) *value++ = *text++;
+    *value = 0;
+}
+void cloudResolutionLabel(int level, char* value) {
+    const char* text = level == 0 ? "Quarter" : level == 1 ? "Half" : "Full";
+    while (*text) *value++ = *text++;
+    *value = 0;
+}
 }
 
 void declare_menu_pages() {
+    MenuPage jitterPage = newPage("Jitter Anti-Aliasing");
+    jitterPage.toggle("Enable Jitter AA", client_set_jitter, client_jitter_enabled)
+        .slider("Samples", 0, 2, client_set_jitter_sample_mode,
+                client_jitter_sample_mode, jitterSamplesLabel).whenEnabled()
+        .text("2 samples: Recommended 120 Hz+ and 120 FPS+")
+            .whenEnabled([] { return client_jitter_sample_mode() == 0; })
+        .text("4 samples: Recommended 165 Hz+ and 165 FPS+")
+            .whenEnabled([] { return client_jitter_sample_mode() == 1; })
+        .text("8 samples: Recommended 360 Hz+ and 360 FPS+")
+            .whenEnabled([] { return client_jitter_sample_mode() == 2; })
+        .text("Based on owner testing to avoid visible flicker.").whenEnabled()
+        .text("No frame blending. Resets after restart.");
+    if (projection_jitter_error()) jitterPage.text(projection_jitter_error());
+    newTile("Jitter Anti-Aliasing").opens(jitterPage).onToggle(client_set_jitter, client_jitter_enabled);
+
     MenuPage tablistPage = newPage("Tablist");
     tablistPage.toggle("Enable Tablist", client_set_tablist, client_tablist_enabled)
         .dropdown("Font", "Inter", "Mojangles", client_settings_set_tablist_mojangles,
@@ -74,6 +105,9 @@ void declare_menu_pages() {
         .toggle("Show 1% low", client_set_fps_low, client_fps_low).whenEnabled()
         .slider("Average / update (ms)", 250, 2000, client_set_fps_interval,
                 client_fps_interval, nullptr, 250).whenEnabled()
+        .dropdown("Font", "Inter", "Mojangles",
+                  [](bool value) { auto settings = client_settings_get_fps_display(); settings.mojangles = value; client_settings_set_fps_display(settings); },
+                  []() { return client_settings_get_fps_display().mojangles; }).whenEnabled()
         .slider("Font scale", 0, ui_scale::count - 1, client_set_fps_font_scale,
                 client_fps_font_scale, fontScaleLabel).whenEnabled()
         .anchor("Anchor", client_set_fps_anchor, client_fps_anchor).whenEnabled()
@@ -82,7 +116,10 @@ void declare_menu_pages() {
 
     MenuPage fpsPage = newPage("FPS Limiter");
     fpsPage.toggle("Enable FPS Limiter", client_set_fps_limit, client_fps_limit_enabled)
-        .slider("FPS Limit", 30, 480, client_set_fps_value, client_fps_value).whenEnabled();
+        .slider("FPS Limit", 30, 480, client_set_fps_value, client_fps_value).whenEnabled()
+        .toggle("Reduce input delay", client_set_fps_native, client_fps_native).whenEnabled()
+        .text("Applies the FPS limit before the next frame.").whenEnabled(client_fps_native)
+        .text("Unavailable; restart Minecraft if just enabled.").whenEnabled(client_fps_native_unavailable);
     newTile("FPS Limiter")
         .opens(fpsPage)
         .icon("assets/icon-fpslimiter.png")
@@ -107,11 +144,24 @@ void declare_menu_pages() {
     MenuPage environmentPage = newPage("Environment");
     environmentPage.toggle("Enable Environment", client_set_environment, client_environment_enabled)
         .toggle("Physically inspired sky", client_set_environment_sky, client_environment_sky).whenEnabled()
+        .toggle("Quarter resolution", client_set_environment_sky_quarter_resolution, client_environment_sky_quarter_resolution)
+            .whenEnabled(client_environment_sky).groupWithPrevious()
         .toggle("Vanilla sun/moon", client_set_environment_vanilla_celestials, client_environment_vanilla_celestials)
             .whenEnabled(client_environment_sky).groupWithPrevious()
+        .toggle("Clouds", client_set_environment_clouds, client_environment_clouds)
+            .whenEnabled(client_environment_sky).groupWithPrevious()
+        .slider("Cloud detail", 1, 3, client_set_environment_cloud_detail, client_environment_cloud_detail, cloudDetailLabel)
+            .whenEnabled(cloudsVisible).groupWithPrevious()
+        .slider("Cloud samples", 8, 64, client_set_environment_cloud_samples, client_environment_cloud_samples, nullptr, 8)
+            .whenEnabled(cloudsVisible).groupWithPrevious()
+        .slider("Cloud resolution", 0, 2, client_set_environment_cloud_resolution, client_environment_cloud_resolution, cloudResolutionLabel)
+            .whenEnabled(cloudsVisible).groupWithPrevious()
         .toggle("Time changer", client_set_environment_time, client_environment_time).whenEnabled()
         .slider("Time (ticks)", 0, 23999, client_set_environment_ticks,
                 client_environment_ticks).whenEnabled(client_environment_time).groupWithPrevious()
+        .toggle("Weather changer", client_set_environment_weather, client_environment_weather).whenEnabled()
+        .slider("Weather (clear / rain / thunder)", 0, 100, client_set_environment_weather_amount,
+                client_environment_weather_amount, nullptr, 10).whenEnabled(client_environment_weather).groupWithPrevious()
         .toggle("Fog color", client_set_environment_fog, client_environment_fog).whenEnabled()
         .slider("Hue (degrees)", 0, 360, client_set_environment_hue,
                 client_environment_hue).whenEnabled(client_environment_fog).groupWithPrevious()
